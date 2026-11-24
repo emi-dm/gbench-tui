@@ -63,6 +63,15 @@ class Status:
             self._kick.wait(5)
 
 
+
+def _short(bench: str) -> str:
+    """A column header that fits: 'decode tok/s (in512)' -> 'tok/s·512', 'TTFT (in512)' -> 'TTFT·512'."""
+    import re
+    m = re.match(r"(.+?) \(in(\d+)\)$", bench)
+    name, n = (m.group(1), m.group(2)) if m else (bench, "")
+    name = {"decode tok/s": "tok/s", "output tok/s": "out t/s"}.get(name, name)
+    return f"{name}·{n}" if n else name
+
 class App:
     def __init__(self, scr):
         self.ui = UI(scr)
@@ -392,14 +401,16 @@ class App:
         while True:
             fields = make() + [Field("__done", f"▶ {done_label}", "action")]
             sel = min(sel, len(fields) - 1)
+            while fields[sel].kind == "info":          # info rows are not selectable
+                sel = (sel + 1) % len(fields)
             h, w = ui.size()
             self.scr.erase()
             ui.header(title, sub)
             y = 3
-            lw = max(len(f.label) for f in fields) + 4
+            lw = max(len(f.label) for f in fields if f.kind != "info") + 4
             for i, f in enumerate(fields):
                 if f.kind == "info":
-                    ui.put(y + i, 4, f.label, ui.color(T.VIOLET, None, True))
+                    ui.put(y + i, 4, f.label, ui.color(T.VIOLET, None, True), maxw=w - 6)
                     continue
                 if i == sel:
                     ui.sel_bar(y + i, 2, w - 4)
@@ -943,7 +954,7 @@ class App:
         ui = self.ui
         its = R.items(run, score)
         if failures:
-            its = [i for i in its if not i["correct"]]
+            its = [i for i in its if i["correct"] is False]
         if not its:
             ui.message("No per-sample records for this score" + (" (or no failures)." if failures else "."))
             return
@@ -952,7 +963,8 @@ class App:
             h, w = ui.size()
             self.scr.erase()
             ok = sum(1 for i in its if i["correct"])
-            ui.header(f"Samples · {score.name}", f"{len(its)} samples · {ok} correct · {len(its) - ok} not"
+            na = sum(1 for i in its if i["correct"] is None)
+            ui.header(f"Samples · {score.name}", f"{len(its)} samples · {ok} correct · {len(its) - ok - na} not"
                       + (" · failures only" if failures else ""))
             view = h - 5
             top = max(0, sel - view + 1)
@@ -962,11 +974,19 @@ class App:
                 if j == sel:
                     ui.sel_bar(y, 2, w - 4)
                 bg = T.SEL if j == sel else None
-                ui.put(y, 4, "✔" if it["correct"] else "✗", ui.color(T.GREEN if it["correct"] else T.RED, bg, True))
-                ui.put(y, 6, f"{str(it['id'])[:22]:<23}", ui.color(T.LIGHT, bg))
-                ui.put(y, 30, f"{str(it.get('category') or '')[:16]:<17}", ui.color(T.VIOLET, bg))
-                txt = (it["detail"] or it["response"] or "").replace("\n", " ")
-                ui.put(y, 48, txt, ui.color(T.MUTED, bg), maxw=max(0, w - 50))
+                mark = "–" if it["correct"] is None else ("✔" if it["correct"] else "✗")
+                ui.put(y, 4, mark, ui.color(T.MUTED if it["correct"] is None else (T.GREEN if it["correct"] else T.RED), bg, True))
+                sid = str(it["id"])
+                sid = sid[7:19] if sid.startswith("sha256:") else sid[:22]
+                ui.put(y, 6, f"{sid:<23}", ui.color(T.LIGHT, bg))
+                ui.put(y, 30, f"{str(it.get('category') or it.get('status') or '')[:12]:<13}", ui.color(T.VIOLET, bg))
+                # the question (last user turn) and, after it, gbench's verdict detail
+                q = (it["prompt"] or "").rsplit("[user]", 1)[-1].strip().replace("\n", " ")
+                det = (it["detail"] or "").replace("\n", " ")
+                det = "" if det in ("ok", it.get("status")) else det
+                ui.put(y, 44, q, ui.color(T.SOFT, bg), maxw=max(0, w - 46 - (min(len(det), 40) + 3 if det else 0)))
+                if det:
+                    ui.put(y, max(44, w - 2 - min(len(det), 40)), det[:40], ui.color(T.MUTED, bg))
             ui.footer("Enter open · ↑↓ move · q back")
             self.scr.refresh()
             k = ui.key()
@@ -988,10 +1008,11 @@ class App:
         ui = self.ui
         w = ui.size()[1]
         c = ui.color
-        lines = [[("status  ", c(T.MUTED)), ("✔ correct" if it["correct"] else f"✗ {it['status']}",
-                                             c(T.GREEN if it["correct"] else T.RED, None, True))]]
+        lines = [[("status  ", c(T.MUTED)), ("✔ correct" if it["correct"] else ("– " if it["correct"] is None else "✗ ") + f"{it['status']}",
+                                             c(T.GREEN if it["correct"] else (T.MUTED if it["correct"] is None else T.RED), None, True))]]
         if it.get("detail"):
-            lines += [[("detail  ", c(T.MUTED)), (ln, c(T.YELLOW))] for ln in UI.wrap(it["detail"], w - 14)]
+            lines += [[("detail  " if n == 0 else "        ", c(T.MUTED)), (ln, c(T.YELLOW))]
+                      for n, ln in enumerate(UI.wrap(it["detail"], w - 14))]
         if it.get("finish_reason") or it.get("completion_tokens"):
             lines.append([("tokens  ", c(T.MUTED)), (f"{it.get('completion_tokens')} · finish {it.get('finish_reason')}", c(T.SOFT))])
         lines.append([("", 0)])
@@ -1042,7 +1063,7 @@ class App:
             for j, b in enumerate(vis):
                 if cols_x + j * cw + cw > w - 1:
                     break
-                ui.put(y, cols_x + j * cw, b[: cw - 1], ui.color(T.grad(j + left, max(2, len(benches))), None, True))
+                ui.put(y, cols_x + j * cw, _short(b)[: cw - 1], ui.color(T.grad(j + left, max(2, len(benches))), None, True))
             for i, r in enumerate(lb["models"]):
                 yy = y + 1 + i * 2
                 if yy >= h - 3:
@@ -1148,7 +1169,7 @@ class App:
                     ("run RAM", f"{self.s.sandbox_memory_gb} GB · {self.s.cpus()} CPUs per run sandbox (one run at a time)"),
                     ("network", "deny-all + the endpoint + Hugging Face / GitHub raw (datasets)"),
                     ("host ↔", f"localhost endpoints are reached as {sandbox.host_alias()}"),
-                    ("cache", str(sandbox.work_dir()) + "  (mounted at /work: HF datasets, in-flight results)")]
+                    ("cache", str(sandbox.work_dir()) + "  (the sandbox workspace: HF datasets, in-flight results)")]
             for k_, v in rows:
                 ui.put(y, 4, f"{k_:<10}", ui.color(T.MUTED))
                 ui.put(y, 15, v, ui.color(T.GREEN if v.endswith("built") or v == "ready" else T.SOFT), maxw=w - 17)

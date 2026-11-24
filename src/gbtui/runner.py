@@ -3,7 +3,7 @@
 The command line is plain gbench (`gbench --golden-only|--evals-only|--personal --remote-endpoint … --models …
 --tokenizer …`): gbench-tui only chooses the flags, starts the sandbox, streams the output and files the results.
 
-Results: gbench writes to /work/runs/<id>/ (a bind mount of ~/.cache/gbench-tui/work); when the run ends its
+Results: gbench writes to <workspace>/runs/<id>/ (~/.cache/gbench-tui/work, the sandbox's workspace); when the run ends its
 `<timestamp>/` directory is moved to the results directory as `<id>/`, with `gbtui.json` (what was asked, how it
 ended) next to gbench's own metadata.json / summary.json / eval_*.json.
 """
@@ -77,8 +77,14 @@ def gbench_args(spec: RunSpec, results_dir: str) -> list[str]:
             if spec.suite_timeout:
                 a += ["--suite-timeout", str(spec.suite_timeout)]
     elif spec.tier == "perf":
-        a += ["--personal"] if spec.perf_mode == "personal" else ["--serving-only", "--preset", "quick", "--text-only",
-                                                                  "--no-stress-test"]
+        if spec.perf_mode == "personal":
+            a += ["--personal"]
+            # a GGUF served by llama-server (no mmproj) is text-only; llama-server answers gbench's image probe
+            # with a 500, which gbench reads as "inconclusive" and then fails the multimodal pillar
+            if spec.endpoint.gguf:
+                a += ["--text-only"]
+        else:
+            a += ["--serving-only", "--preset", "quick", "--text-only", "--no-stress-test"]
     if spec.thinking:
         a += ["--eval-thinking"]
     if str(spec.temperature).strip():

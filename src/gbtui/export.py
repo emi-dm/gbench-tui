@@ -71,7 +71,7 @@ def export(runs: list, out: Path, fmt: str = "jsonl", only_failures: bool = Fals
                                      "n": s.n, "correct": s.correct, "status": s.status,
                                      "leaderboard_comparable": s.comparable}, default=str) + "\n")
             for it in R.items(run):
-                if only_failures and it["correct"]:
+                if only_failures and it["correct"] is not False:
                     continue
                 row = {**ctx, **{k: it[k] for k in ("suite", "kind", "category", "title", "prompt", "response", "reasoning",
                                                      "finish_reason", "completion_tokens", "status", "detail", "correct")},

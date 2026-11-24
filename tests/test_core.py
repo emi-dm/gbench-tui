@@ -66,6 +66,8 @@ class TestArgs(unittest.TestCase):
 
     def test_perf_and_preflight(self):
         self.assertIn("--personal", runner.gbench_args(runner.RunSpec(endpoint=ep(), tier="perf"), "/r"))
+        self.assertNotIn("--text-only", runner.gbench_args(runner.RunSpec(endpoint=ep(), tier="perf"), "/r"))
+        self.assertIn("--text-only", runner.gbench_args(runner.RunSpec(endpoint=ep(gguf="/m.gguf"), tier="perf"), "/r"))
         a = runner.gbench_args(runner.RunSpec(endpoint=ep(), tier="preflight", evals=["bfcl"]), "/r")
         self.assertIn("--preflight", a)
         self.assertNotIn("--eval-limit", a)

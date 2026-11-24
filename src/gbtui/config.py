@@ -67,7 +67,7 @@ class RunDefaults:
 class Settings:
     endpoints: list = field(default_factory=list)
     active: str = ""                 # name of the endpoint being evaluated
-    sandbox_memory_gb: int = 6       # RAM cap of each run sandbox (microVM)
+    sandbox_memory_gb: int = 4       # RAM cap of each run sandbox (microVM)
     sandbox_cpus: int = 0            # 0 = auto (half the cores, at most 6)
     min_free_gb: float = 4.0         # refuse to start a sandbox / llama-server if the host would drop below this
     results_dir: str = ""            # "" = ~/.local/share/gbench-tui/results

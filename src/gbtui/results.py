@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import catalog
+
 
 def _load(p: Path):
     try:
@@ -201,11 +203,20 @@ def items(run: Run, score: Score | None = None) -> list:
             if r.get("benchmark_type") != "golden":
                 continue
             for t in r.get("task_results", []):
+                # gbench keeps the verdict, not the case: prompt and expected answer come from the task's JSON
+                task = catalog.golden_task(t.get("task_id") or "") or {}
+                msgs = (task.get("conversation") or {}).get("messages")
+                truth = task.get("golden_truth") or {}
+                gold = truth.get("canonical_answer") or truth.get("expected_outputs") or truth.get("expected_tool_calls") \
+                    or t.get("match_type") or ""
+                if not isinstance(gold, str):
+                    gold = json.dumps(gold, ensure_ascii=False)
+                na = t.get("status") == "not_applicable"
                 out.append({"suite": "golden_set", "kind": "golden", "id": t.get("task_id"), "category": t.get("category"),
-                            "title": t.get("title") or "", "prompt": "", "messages": None,
+                            "title": t.get("title") or "", "prompt": _msgs_prompt(msgs) if msgs else "", "messages": msgs,
                             "response": t.get("response_text") or "", "reasoning": t.get("reasoning") or "",
-                            "tool_calls": t.get("tool_calls") or [], "gold": t.get("match_type") or "",
-                            "correct": t.get("status") == "passed", "status": t.get("status"),
+                            "tool_calls": t.get("tool_calls") or [], "gold": gold,
+                            "correct": None if na else t.get("status") == "passed", "status": t.get("status"),
                             "detail": t.get("details") or "", "finish_reason": t.get("finish_reason"),
                             "completion_tokens": t.get("completion_tokens")})
     evals = [s for s in run.scores if s.kind == "eval"] if score is None else ([score] if score.kind == "eval" else [])

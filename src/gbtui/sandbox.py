@@ -5,8 +5,8 @@
             ▼                                         │ the only host port the sandbox may reach
     sbx  gbtui-run-<pid>-<hex>  ← from the template gbtui-gbench:v<N>, its own RAM/CPU cap
          ├─ /opt/gbench (venv): gbench + its eval extras, the backend that does all the work
-         ├─ /work  (bind mount of ~/.cache/gbench-tui/work): HF cache and the run's results
-         └─ network: deny-all, then allow only the endpoint and the dataset hosts (Hugging Face, GitHub raw)
+         ├─ ~/.cache/gbench-tui/work  (workspace, same path inside): HF cache and the run's results
+         └─ network: sbx deny-by-default + only the endpoint and the dataset hosts (Hugging Face, GitHub raw)
 
 `setup()` builds the template once: a builder sandbox installs gbench from a pinned checkout (PyPI only, meanwhile),
 dumps gbench's own suite / Golden Set catalog to JSON, is saved with `sbx template save` and removed. Every run then
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from .config import cache_dir, config_dir
 
-VERSION = "1"
+VERSION = "2"
 TEMPLATE = os.environ.get("GBTUI_TEMPLATE") or f"gbtui-gbench:v{VERSION}"
 BUILDER = "gbtui-build"
 PREFIX = "gbtui-run-"
@@ -35,7 +35,8 @@ GBENCH_REPO = "https://github.com/google-deepmind/gbench"
 GBENCH_REF = os.environ.get("GBTUI_GBENCH_REF", "main")
 VENV = "/opt/gbench"
 PYTHON = "3.12"
-WORK = "/work"                                 # mount point of cache_dir()/work inside the sandbox
+# The workspace: sbx mounts it at the same path inside the sandbox (HF cache and in-flight results)
+WORK = str(cache_dir() / "work")
 MARKER = "/etc/gbtui-sandbox"
 BUILD_MEMORY = "4g"
 # Hosts the builder may reach while installing (then denied again)
@@ -54,32 +55,9 @@ SKIP_EXTRAS = ["tree-sitter", "tree-sitter-python"]
 _SECRET = re.compile(r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|AUTH", re.I)
 
 
-_SBX_AUTH = ("DOCKER_PAT", "DOCKER_ACCESS_TOKEN")
-
-
-def _docker_token() -> str:
-    """sbx's own sign-in, for hosts where sbx cannot reach the macOS Keychain (e.g. launched from an agent):
-    $DOCKER_PAT / $DOCKER_ACCESS_TOKEN, or a token kept in ~/.config/gbench-tui/docker-pat (mode 600).
-    It is only given to the sbx CLI, never to a sandbox."""
-    p = config_dir() / "docker-pat"
-    try:
-        if p.stat().st_mode & 0o077:
-            p.chmod(0o600)
-        return p.read_text().strip()
-    except OSError:
-        return ""
-
-
 def _env() -> dict:
-    """The environment sbx is started with: the user's, minus anything that looks like a secret
-    (except sbx's own Docker sign-in token, if one is configured)."""
-    env = {k: v for k, v in os.environ.items() if not _SECRET.search(k)}
-    for k in _SBX_AUTH:
-        if os.environ.get(k):
-            env[k] = os.environ[k]
-    if not any(k in env for k in _SBX_AUTH) and (tok := _docker_token()):
-        env["DOCKER_PAT"] = tok
-    return env
+    """The environment sbx is started with: the user's, minus anything that looks like a secret."""
+    return {k: v for k, v in os.environ.items() if not _SECRET.search(k)}
 
 
 def sbx(*args, timeout: float = 120, input: bytes | None = None, text: bool = True) -> subprocess.CompletedProcess:
@@ -201,9 +179,9 @@ def create(memory_gb: int, cpus: int, allow: list[str], on_line=None) -> str:
         raise RuntimeError("sandbox template not built yet (Sandbox → Build template)")
     prune()
     name = f"{PREFIX}{os.getpid()}-{secrets.token_hex(3)}"
-    say(f"creating sandbox {name} ({memory_gb} GB RAM, {cpus} CPUs, network: deny-all + {len(allow)} hosts)")
+    say(f"creating sandbox {name} ({memory_gb} GB RAM, {cpus} CPUs, network: sbx default + {len(allow)} hosts)")
     r = sbx("create", "--no-progress", "--name", name, "--memory", f"{memory_gb}g", "--cpus", str(cpus),
-            "--pull", "never", "-t", TEMPLATE, "shell", f"{work_dir()}:{WORK}", timeout=600)
+            "--pull", "never", "-t", TEMPLATE, "shell", str(work_dir()), timeout=600)
     if r.returncode != 0:
         destroy(name)
         if "not signed in" in _out(r):
@@ -406,9 +384,10 @@ for req in tomllib.load(open("/opt/gbench-src/pyproject.toml", "rb"))["project"]
 PYEOF
 /tmp/uvenv/bin/uv pip install -q --python {VENV}/bin/python /opt/gbench-src -r /tmp/extras.txt {' '.join(repr(p) for p in EXTRA_PIP)}
 rm -rf /tmp/uvenv
-{VENV}/bin/python -m nltk.downloader -q -d /opt/nltk_data punkt punkt_tab || echo "warning: nltk data not downloaded"
+# ifeval & co. need nltk's punkt; nltk refuses proxied downloads unless told the proxy (sbx's) is trusted
+NLTK_ALLOW_PROXIED_URLOPEN=1 {VENV}/bin/python -m nltk.downloader -q -d /opt/nltk_data punkt punkt_tab
+test -d /opt/nltk_data/tokenizers/punkt_tab
 ln -sf {VENV}/bin/gbench /usr/local/bin/gbench
-mkdir -p {WORK}
 echo {VERSION} > {MARKER}
 {VENV}/bin/gbench --version
 """
@@ -443,6 +422,11 @@ echo {VERSION} > {MARKER}
     finally:
         destroy(BUILDER)
     if ok:
+        for old in templates():                   # older gbtui-gbench:vN templates: disk only
+            repo = TEMPLATE.split(":")[0]
+            if (old.split(":")[0] == repo or old.split(":")[0].endswith("/" + repo)) and not _same(old, TEMPLATE):
+                sbx("template", "rm", old, timeout=300)
+                on_line(f"removed the old template {old}")
         refresh_catalog(on_line)
         on_line(f"✔ template {TEMPLATE} ready: each run gets a fresh sandbox from it, removed when the run ends")
     return ok
