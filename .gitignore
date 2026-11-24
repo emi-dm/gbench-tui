@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/
+dist/
+*.egg-info/
+.DS_Store
+/results/
+/assets/*.mp4.tmp
