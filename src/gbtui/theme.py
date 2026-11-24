@@ -1,20 +1,21 @@
-"""Google DeepMind palette for the terminal (xterm-256 approximations) and the gbench wordmark.
+"""Google DeepMind's blues and white for the terminal (xterm-256 approximations) and the gbench wordmark.
 
-    blue   #4285F4 → 69     deep  #0B57D0 → 26     cyan  #24C1E0 → 38
-    violet #9177C7 → 104    pink  #CA6673 → 168    ink   #0E1117 → 233
-    green  #34A853 → 71     yellow #FBBC04 → 214   red   #EA4335 → 203
+    deep   #0B57D0 → 25     blue   #1A73E8 → 33     sky    #4285F4 → 39
+    light  #8AB4F8 → 111    pale   #D3E3FD → 153    white  #FFFFFF → 231
 
-The wordmark and progress bars use the blue → violet → pink gradient of Google DeepMind / Gemini.
+Everything is blue on white/ink: the wordmark and the bars run deep blue → white. Green, yellow and red are kept only
+for what they mean (passed, warning, failed).
 """
 from __future__ import annotations
 
-BLUE, DEEP, CYAN, VIOLET, PURPLE, PINK = 69, 26, 38, 104, 99, 168
-GREEN, YELLOW, RED = 71, 214, 203
-INK, BAR, SEL, RULE, MUTED, SOFT, LIGHT = 233, 235, 237, 239, 246, 250, 255
-GRADIENT = [27, 33, 69, 105, 141, 140, 176, 175, 168]
+# names kept from the first palette (used across the TUI); all of them are blues now
+DEEP, BLUE, CYAN, VIOLET, PURPLE, PINK = 25, 33, 39, 75, 111, 153
+GREEN, YELLOW, RED = 79, 221, 203
+INK, BAR, SEL, RULE, MUTED, SOFT, LIGHT = 233, 234, 17, 24, 110, 189, 231
+GRADIENT = [25, 26, 27, 33, 39, 75, 111, 153, 189, 231]
 
-HEX = {"blue": "#4285F4", "deep": "#0B57D0", "cyan": "#24C1E0", "violet": "#9177C7", "pink": "#CA6673",
-       "green": "#34A853", "yellow": "#FBBC04", "red": "#EA4335", "ink": "#0E1117"}
+HEX = {"deep": "#0B57D0", "blue": "#1A73E8", "sky": "#4285F4", "light": "#8AB4F8", "pale": "#D3E3FD",
+       "white": "#FFFFFF", "navy": "#041E49", "ink": "#0A0F1C"}
 
 WORDMARK = [
     " ██████╗ ██████╗ ███████╗███╗   ██╗ ██████╗██╗  ██╗",
@@ -35,13 +36,13 @@ def grad(i: int, n: int) -> int:
 
 
 def score_color(v: float | None) -> int:
-    """Heat for a percentage: red < 30 ≤ yellow < 60 ≤ green; violet for ≥ 85."""
+    """Heat for a percentage, in blues: white ≥ 85 > pale ≥ 60 > sky ≥ 30 > red."""
     if v is None:
         return MUTED
     if v >= 85:
-        return CYAN
+        return LIGHT
     if v >= 60:
-        return GREEN
+        return PURPLE
     if v >= 30:
-        return YELLOW
+        return CYAN
     return RED

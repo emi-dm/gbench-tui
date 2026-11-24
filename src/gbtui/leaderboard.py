@@ -3,7 +3,7 @@
 A model's **gScore** is the mean of its percentage scores (Golden Set and every eval suite it has a score for). Two
 models are only strictly comparable on the suites they share with the same --eval-limit, so the table shows the number
 of samples next to each score, and `comparable_only` keeps only the results gbench itself marks leaderboard-comparable.
-Written after every run as leaderboard.md and leaderboard.html (DeepMind palette) next to the results directory.
+Written after every run as leaderboard.md and leaderboard.html (DeepMind blue and white) next to the results directory.
 """
 from __future__ import annotations
 
@@ -88,16 +88,16 @@ def to_html(lb: dict) -> str:
     head = "".join(f"<th>{e(b)}</th>" for b in [*benches, *perf])
     return f"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>gbench-tui leaderboard</title><style>
-:root{{--bg:#0E1117;--card:#161B26;--ink:#E8EAED;--muted:#9AA0A6;--rule:#2A3040;--blue:#4285F4;--violet:#9177C7;--pink:#CA6673;--cyan:#24C1E0}}
+:root{{--bg:#FFFFFF;--card:#F8FAFF;--ink:#041E49;--muted:#5F6B85;--rule:#D3E3FD;--deep:#0B57D0;--blue:#1A73E8;--sky:#4285F4;--pale:#D3E3FD}}
 body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 "Google Sans",Inter,system-ui,sans-serif}}
-header{{padding:28px 24px 8px}}h1{{margin:0;font-size:26px;font-weight:600;background:linear-gradient(90deg,var(--blue),var(--violet),var(--pink));-webkit-background-clip:text;background-clip:text;color:transparent}}
+header{{padding:28px 24px 8px}}h1{{margin:0;font-size:26px;font-weight:600;background:linear-gradient(90deg,var(--deep),var(--sky));-webkit-background-clip:text;background-clip:text;color:transparent}}
 p{{color:var(--muted);margin:6px 0 0}}.wrap{{overflow-x:auto;padding:16px 24px 32px}}
 table{{border-collapse:collapse;min-width:100%;background:var(--card);border-radius:12px;overflow:hidden}}
 th,td{{padding:9px 12px;border-bottom:1px solid var(--rule);text-align:left;white-space:nowrap}}
-th{{font-weight:500;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}}
-td{{position:relative}}.bar{{position:absolute;left:0;top:0;bottom:0;width:var(--v);background:linear-gradient(90deg,#4285F433,#9177C744)}}
+th{{font-weight:500;color:var(--deep);font-size:12px;text-transform:uppercase;letter-spacing:.04em}}
+td{{position:relative}}.bar{{position:absolute;left:0;top:0;bottom:0;width:var(--v);background:linear-gradient(90deg,#D3E3FD,#E8F0FE)}}
 td span{{position:relative;font-variant-numeric:tabular-nums}}td small,.model small{{position:relative;color:var(--muted);margin-left:6px;font-size:11px}}
-.model small{{display:block;margin:0}}.g{{font-weight:700;color:var(--cyan)}}.rank{{color:var(--muted)}}.na{{color:#5f6368}}.num{{font-variant-numeric:tabular-nums}}
+.model small{{display:block;margin:0}}.g{{font-weight:700;color:var(--deep)}}.rank{{color:var(--muted)}}.na{{color:#A8B3C7}}.num{{font-variant-numeric:tabular-nums}}
 </style></head><body><header><h1>gbench-tui leaderboard</h1>
 <p>Updated {e(lb['updated'])} · results of <a style="color:var(--blue)" href="https://github.com/google-deepmind/gbench">gbench</a> runs, each inside a Docker Sandbox · gScore = mean of the % scores · small numbers = samples scored</p></header>
 <div class=wrap><table><thead><tr><th>#</th><th>Model</th><th>gScore</th>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table></div></body></html>"""

@@ -16,8 +16,8 @@ SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 def _basic(c: int) -> int:
     """xterm-256 → the 8 basic colours (for terminals without 256 colours)."""
-    table = {T.BLUE: curses.COLOR_BLUE, T.DEEP: curses.COLOR_BLUE, T.CYAN: curses.COLOR_CYAN, T.VIOLET: curses.COLOR_MAGENTA,
-             T.PURPLE: curses.COLOR_MAGENTA, T.PINK: curses.COLOR_MAGENTA, T.GREEN: curses.COLOR_GREEN,
+    table = {T.BLUE: curses.COLOR_BLUE, T.DEEP: curses.COLOR_BLUE, T.CYAN: curses.COLOR_CYAN, T.VIOLET: curses.COLOR_CYAN,
+             T.PURPLE: curses.COLOR_CYAN, T.PINK: curses.COLOR_WHITE, T.GREEN: curses.COLOR_GREEN,
              T.YELLOW: curses.COLOR_YELLOW, T.RED: curses.COLOR_RED}
     if c in table:
         return table[c]
@@ -104,10 +104,10 @@ class UI:
         bar = self.color(T.SOFT, T.BAR)
         self.fill(0, 0, w, bar)
         x = 0
-        for i, ch in enumerate(" g·bench "):
-            self.put(0, x + i, ch, self.color(T.LIGHT, T.grad(i, 9), True))
+        for i, ch in enumerate(" g·bench "):            # DeepMind blues: deep → sky, white letters
+            self.put(0, x + i, ch, self.color(T.LIGHT, T.GRADIENT[min(i, 4)], True))
         x += 9
-        self.put(0, x, "▌", self.color(T.grad(8, 9), T.BAR))
+        self.put(0, x, "▌", self.color(T.GRADIENT[4], T.BAR))
         self.put(0, x + 2, title, self.color(T.LIGHT, T.BAR, True))
         right = "tui · Google DeepMind gbench "
         if w - len(right) > x + len(title) + 6:

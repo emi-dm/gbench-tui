@@ -8,7 +8,7 @@ Set Height 780
 Set Padding 16
 Set Framerate 12
 Set TypingSpeed 60ms
-Set Theme { "name": "DeepMind", "background": "#0E1117", "foreground": "#E8EAED", "cursor": "#8AB4F8", "selection": "#28304A", "black": "#0E1117", "red": "#F28B82", "green": "#81C995", "yellow": "#FDD663", "blue": "#4285F4", "magenta": "#9177C7", "cyan": "#24C1E0", "white": "#E8EAED", "brightBlack": "#5F6368", "brightRed": "#F6AEA9", "brightGreen": "#A8DAB5", "brightYellow": "#FDE293", "brightBlue": "#8AB4F8", "brightMagenta": "#C58AF9", "brightCyan": "#78D9EC", "brightWhite": "#FFFFFF" }
+Set Theme { "name": "DeepMind blue", "background": "#0A0F1C", "foreground": "#FFFFFF", "cursor": "#8AB4F8", "selection": "#0B57D0", "black": "#0A0F1C", "red": "#F28B82", "green": "#81C995", "yellow": "#FDD663", "blue": "#1A73E8", "magenta": "#4285F4", "cyan": "#8AB4F8", "white": "#FFFFFF", "brightBlack": "#5F6B85", "brightRed": "#F6AEA9", "brightGreen": "#A8DAB5", "brightYellow": "#FDE293", "brightBlue": "#8AB4F8", "brightMagenta": "#AECBFA", "brightCyan": "#D3E3FD", "brightWhite": "#FFFFFF" }
 
 Hide
 Type "export PYTHONPATH=src TERM=xterm-256color; alias gbench-tui='python3 -m gbtui'; clear"

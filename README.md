@@ -4,10 +4,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/backend-gbench-4285F4" alt="backend: gbench">
-  <img src="https://img.shields.io/badge/sandbox-Docker%20Sandboxes-9177C7" alt="sandbox: Docker Sandboxes">
-  <img src="https://img.shields.io/badge/host%20deps-none%20(stdlib%20curses)-24C1E0" alt="no host dependencies">
-  <img src="https://img.shields.io/badge/license-Apache--2.0-CA6673" alt="Apache-2.0">
+  <img src="https://img.shields.io/badge/backend-gbench-0B57D0" alt="backend: gbench">
+  <img src="https://img.shields.io/badge/sandbox-Docker%20Sandboxes-1A73E8" alt="sandbox: Docker Sandboxes">
+  <img src="https://img.shields.io/badge/host%20deps-none%20(stdlib%20curses)-4285F4" alt="no host dependencies">
+  <img src="https://img.shields.io/badge/license-Apache--2.0-8AB4F8" alt="Apache-2.0">
 </p>
 
 <p align="center">
@@ -30,10 +30,11 @@ Sandbox**, keeps an eye on your machine's memory and turns the results into some
 - **Results**: every run with its scores, the per-sample explorer (prompt, reasoning, answer, tool calls, expected
   answer, why it failed) and gbench's own log.
 - **Leaderboard**: the latest score of every model on every benchmark, ranked by gScore, also written as
-  `leaderboard.md`, `.html` (DeepMind palette) and `.json` after every run.
+  `leaderboard.md`, `.html` (DeepMind blue and white) and `.json` after every run.
 - **Export as a dataset**: samples and scores as JSONL and/or Parquet with a Hugging Face dataset card, ready for
   `huggingface-cli upload`.
-- **DeepMind colours**: the blue → violet → pink gradient of Google DeepMind / Gemini, in the terminal and the HTML.
+- **DeepMind colours**: Google DeepMind's blues and white (deep blue `#0B57D0` → `#1A73E8` → `#4285F4` → white), in
+  the terminal and in the HTML leaderboard.
 
 ```text
   host (macOS / Linux)                               Docker Sandbox  gbtui-run-<pid>-<hex>   (microVM, RAM/CPU cap)
