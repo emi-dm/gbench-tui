@@ -7,18 +7,24 @@ explorer and the dataset export. Nothing here re-scores anything: the numbers ar
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import catalog
+from . import catalog, config
 
 
 def _load(p: Path):
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def _load_dict(p: Path) -> dict:
+    d = _load(p)
+    return d if isinstance(d, dict) else {}
 
 
 @dataclass
@@ -54,11 +60,44 @@ class Run:
         ep = self.endpoint
         if ep.get("name"):
             return ep["name"]
-        for r in self.summary.get("models", []) + self.summary.get("failures", []):
+        for r in (self.summary.get("models") or []) + (self.summary.get("failures") or []):
+            if not isinstance(r, dict):
+                continue
             m = r.get("model_short") or r.get("model") or r.get("model_name")
             if m:
                 return str(m)
         return "?"
+
+    @property
+    def quant(self) -> str:
+        ep = self.endpoint
+        if ep.get("quant"):
+            q = config.normalize_quant(ep["quant"])
+            if q:
+                return q
+        for cand in (ep.get("gguf"), ep.get("model"), ep.get("name")):
+            q = config.detect_quant(cand or "")
+            if q:
+                return q
+        for r in (self.summary.get("models") or []) + (self.summary.get("failures") or []):
+            if not isinstance(r, dict):
+                continue
+            for k in ("model_short", "model", "model_name"):
+                q = config.detect_quant(str(r.get(k) or ""))
+                if q:
+                    return q
+        return ""
+
+    @property
+    def base_model(self) -> str:
+        return config.split_model_quant(self.model, self.quant)[0]
+
+    @property
+    def model_label(self) -> str:
+        q = self.quant
+        if not q:
+            return self.model
+        return f"{self.base_model} ({q})"
 
     @property
     def tier(self) -> str:
@@ -99,7 +138,7 @@ class Run:
 
 
 def _num(x):
-    return x if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+    return x if isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) else None
 
 
 def _perf_scores(r: dict) -> list:
@@ -127,11 +166,13 @@ def _perf_scores(r: dict) -> list:
 def load_run(path: Path) -> Run | None:
     if not path.is_dir():
         return None
-    run = Run(id=path.name, path=path, meta=_load(path / "gbtui.json") or {}, metadata=_load(path / "metadata.json") or {},
-              summary=_load(path / "summary.json") or {})
+    run = Run(id=path.name, path=path, meta=_load_dict(path / "gbtui.json"), metadata=_load_dict(path / "metadata.json"),
+              summary=_load_dict(path / "summary.json"))
     seen_eval = set()
-    results = list(run.summary.get("models", [])) + list(run.summary.get("failures", []))
+    results = list(run.summary.get("models") or []) + list(run.summary.get("failures") or [])
     for r in results:
+        if not isinstance(r, dict):
+            continue
         bt = r.get("benchmark_type")
         if bt == "golden":
             acc = _num(r.get("accuracy_percent"))
@@ -151,7 +192,9 @@ def load_run(path: Path) -> Run | None:
         elif bt in ("serving", "serving_multimodal", "throughput"):
             run.scores.extend(_perf_scores(r))
         elif bt == "quality":
-            run.scores.append(Score("quality", "gemmaclaw_qa", _num(r.get("pass_rate")) or _num(r.get("score")), "%",
+            pr = _num(r.get("pass_rate"))
+            val = pr if pr is not None else _num(r.get("score"))
+            run.scores.append(Score("quality", "gemmaclaw_qa", val, "%",
                                     int(r.get("total") or 0), status=r.get("status", "")))
     # eval_*.json not yet in a summary (an interrupted run)
     for f in sorted(path.glob("eval_*.json")):
@@ -199,16 +242,16 @@ def items(run: Run, score: Score | None = None) -> list:
     out = []
     want_golden = score is None or score.kind == "golden"
     if want_golden:
-        for r in run.summary.get("models", []) + run.summary.get("failures", []):
-            if r.get("benchmark_type") != "golden":
+        for r in (run.summary.get("models") or []) + (run.summary.get("failures") or []):
+            if not isinstance(r, dict) or r.get("benchmark_type") != "golden":
                 continue
-            for t in r.get("task_results", []):
+            for t in r.get("task_results") or []:
                 # gbench keeps the verdict, not the case: prompt and expected answer come from the task's JSON
                 task = catalog.golden_task(t.get("task_id") or "") or {}
                 msgs = (task.get("conversation") or {}).get("messages")
                 truth = task.get("golden_truth") or {}
-                gold = truth.get("canonical_answer") or truth.get("expected_outputs") or truth.get("expected_tool_calls") \
-                    or t.get("match_type") or ""
+                gold = next((truth[k] for k in ("canonical_answer", "expected_outputs", "expected_tool_calls")
+                             if k in truth and truth[k] is not None), t.get("match_type") or "")
                 if not isinstance(gold, str):
                     gold = json.dumps(gold, ensure_ascii=False)
                 na = t.get("status") == "not_applicable"
@@ -221,8 +264,11 @@ def items(run: Run, score: Score | None = None) -> list:
                             "completion_tokens": t.get("completion_tokens")})
     evals = [s for s in run.scores if s.kind == "eval"] if score is None else ([score] if score.kind == "eval" else [])
     for s in evals:
-        d = _load(run.path / s.file) if s.file else None
-        for t in (d or {}).get("sample_traces", []) or []:
+        d = None
+        if s.file:
+            p_cand = run.path / s.file if not Path(s.file).is_absolute() else run.path / Path(s.file).name
+            d = _load(p_cand) or _load(run.path / Path(s.file).name)
+        for t in (d if isinstance(d, dict) else {}).get("sample_traces", []) or []:
             out.append({"suite": s.name, "kind": "eval", "id": t.get("sample_key") or t.get("sample_idx"),
                         "category": t.get("category"), "title": "", "prompt": _msgs_prompt(t.get("messages")),
                         "messages": t.get("messages"), "response": t.get("response_text") or "",

@@ -86,11 +86,14 @@ def load() -> dict:
                            for k, v in table.items()],
                 "pillars": list(dict.fromkeys(v["pillar"] for v in table.values())), "golden": _golden_from_src()}
         source = "gbench docs (build the sandbox template for gbench's own list)"
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("suites", [])
+    data.setdefault("golden", [])
     for s in data["suites"]:
         t = table.get(s["name"], {})
-        s.setdefault("title", t.get("title") or s["name"])
-        s["title"] = t.get("title") or s["name"]
-        s["description"] = t.get("description", "")
+        s["title"] = t.get("title") or s.get("title") or s["name"]
+        s["description"] = t.get("description", "") or s.get("description", "")
         s["options"] = t.get("options", "")
         if not s.get("pillar") or s["pillar"] == "Other":
             s["pillar"] = t.get("pillar") or "Other"
@@ -130,17 +133,27 @@ def doc(name: str) -> str:
         return f"# {s.get('title', name)}\n\n{s.get('description', '(no description)')}\n"
 
 
-def golden_task(task_id: str) -> dict | None:
-    for fp in (src_dir() / "gbench" / "golden_dataset").glob("*.json"):
+@lru_cache(maxsize=1)
+def _golden_map() -> dict[str, dict]:
+    out = {}
+    gd = src_dir() / "gbench" / "golden_dataset"
+    if not gd.is_dir():
+        return out
+    for fp in sorted(gd.glob("*.json")):
         try:
-            d = json.loads(fp.read_text())
+            d = json.loads(fp.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if d.get("id", fp.stem) == task_id:
-            return d
-    return None
+        if isinstance(d, dict):
+            out[d.get("id", fp.stem)] = d
+    return out
+
+
+def golden_task(task_id: str) -> dict | None:
+    return _golden_map().get(task_id)
 
 
 def reload() -> None:
     load.cache_clear()
     _table.cache_clear()
+    _golden_map.cache_clear()

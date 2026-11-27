@@ -65,18 +65,24 @@ class TestArgs(unittest.TestCase):
             self.assertIn(frag, s)
 
     def test_perf_and_preflight(self):
-        self.assertIn("--personal", runner.gbench_args(runner.RunSpec(endpoint=ep(), tier="perf"), "/r"))
-        self.assertNotIn("--text-only", runner.gbench_args(runner.RunSpec(endpoint=ep(), tier="perf"), "/r"))
+        perf_args = runner.gbench_args(runner.RunSpec(endpoint=ep(), tier="perf", thinking=True, temperature="0.5"), "/r")
+        self.assertIn("--personal", perf_args)
+        self.assertNotIn("--text-only", perf_args)
+        self.assertNotIn("--eval-thinking", perf_args)
+        self.assertNotIn("--temperature", perf_args)
         self.assertIn("--text-only", runner.gbench_args(runner.RunSpec(endpoint=ep(gguf="/m.gguf"), tier="perf"), "/r"))
         a = runner.gbench_args(runner.RunSpec(endpoint=ep(), tier="preflight", evals=["bfcl"]), "/r")
         self.assertIn("--preflight", a)
         self.assertNotIn("--eval-limit", a)
 
-    def test_network_rules(self):
+    def test_network_rules_and_endpoint_url(self):
         rules = sandbox.allow_for("http://127.0.0.1:8080/v1")
         self.assertIn(f"{sandbox.host_alias()}:8080", rules)
         self.assertIn("huggingface.co", rules)
         self.assertEqual(sandbox.allow_for("https://api.example.com/v1")[:2], ["api.example.com:443", "api.example.com:80"])
+        self.assertTrue(config.Endpoint(name="v6", base_url="http://[::1]:8080/v1").is_local)
+        self.assertEqual(config.Endpoint(name="tls", base_url="https://api.example.com/v1").port, 443)
+        self.assertEqual(sandbox.sandbox_url("http://localhost"), f"http://{sandbox.host_alias()}")
 
 
 class TestResults(unittest.TestCase):
@@ -126,6 +132,90 @@ class TestResults(unittest.TestCase):
         export.export(R.list_runs(self.root), out2, "jsonl", True, lambda _m: None)
         fails = (out2 / "data" / "samples.jsonl").read_text().splitlines()
         self.assertTrue(all(not json.loads(x)["correct"] for x in fails))
+
+    def test_leaderboard_preflight_and_escaping(self):
+        fake_run(self.root, "20261124-140000-preflight-only", "pre|model", status="ok")
+        lb = leaderboard.build(R.list_runs(self.root))
+        self.assertNotIn("pre|model", [m["model"] for m in lb["models"]])
+        # comparable_only filters out non-comparable evals
+        lb_cmp = leaderboard.build(R.list_runs(self.root), comparable_only=True)
+        self.assertEqual([m["model"] for m in lb_cmp["models"]], ["a"])
+        # Markdown escaping for pipe in model name & HTML script safety + charts
+        fake_run(self.root, "20261124-150000-pipe", "m|1</script>", golden=80.0)
+        lb_all = leaderboard.build(R.list_runs(self.root))
+        md = leaderboard.to_markdown(lb_all)
+        self.assertIn(r"m\|1", md)
+        html_out = leaderboard.to_html(lb_all, "aurora")
+        self.assertIn("<table>", html_out)
+        self.assertIn("renderRadar()", html_out)
+        self.assertIn("renderBars()", html_out)
+        self.assertNotIn("m|1</script>", html_out)
+
+    def test_quantization_dimension_end_to_end(self):
+        # 1. Quant detection & splitting across naming conventions
+        self.assertEqual(config.split_model_quant("LFM3-1.7B_Q4_K_M.gguf"), ("LFM3-1.7B", "Q4_K_M"))
+        self.assertEqual(config.split_model_quant("LFM3-1.7B-Q8_0.gguf"), ("LFM3-1.7B", "Q8_0"))
+        self.assertEqual(config.split_model_quant("gemma-3-4b-UD-Q4_K_XL.gguf"), ("gemma-3-4b", "UD-Q4_K_XL"))
+        self.assertEqual(config.split_model_quant("qwen3:4b-q4_K_M"), ("qwen3:4b", "Q4_K_M"))
+        self.assertEqual(config.split_model_quant("Qwen2.5-1.5B"), ("Qwen2.5-1.5B", ""))
+        self.assertEqual(config.split_model_quant("gemma-3-4b"), ("gemma-3-4b", ""))
+        self.assertLess(config.quant_bits("Q4_K_M"), config.quant_bits("Q8_0"))
+        self.assertLess(config.quant_bits("Q8_0"), config.quant_bits("BF16"))
+
+        # 2. Endpoint auto-detects quant & run_id embeds quant when omitted from name
+        ep_q4 = config.Endpoint(name="lfm3-1.7b", gguf="/models/LFM3-1.7B_Q4_K_M.gguf")
+        self.assertEqual(ep_q4.effective_quant, "Q4_K_M")
+        self.assertEqual(ep_q4.base_model, "lfm3-1.7b")
+        self.assertIn("Q4_K_M", runner.RunSpec(endpoint=ep_q4, tier="golden").run_id())
+
+        # 3. Same base model evaluated at Q4_K_M and Q8_0 stays distinct (even with identical endpoint name!)
+        qroot = Path(tempfile.mkdtemp())
+
+        def make_q_run(rid, ep_dict, golden, gsm8k, tpot_ms):
+            d = qroot / rid
+            d.mkdir(parents=True)
+            (d / "summary.json").write_text(json.dumps({"models": [
+                {"benchmark_type": "golden", "accuracy_percent": golden, "applicable_tasks": 10, "passed_cases": 8,
+                 "failed_cases": 2, "error_cases": 0, "not_applicable_cases": 0, "status": "completed"},
+                {"benchmark_type": "eval", "eval_name": "gsm8k", "accuracy": gsm8k, "total_questions": 20,
+                 "correct_answers": 15, "leaderboard_comparable": True},
+                {"benchmark_type": "serving", "median_tpot_ms": tpot_ms, "median_ttft_ms": 120.0, "completed_requests": 8},
+            ], "failures": []}))
+            (d / "gbtui.json").write_text(json.dumps({
+                "run_id": rid, "status": "ok", "started": 2000.0 + len(rid), "finished": 2100.0,
+                "spec": {"tier": "evals", "endpoint": ep_dict},
+            }))
+
+        make_q_run("20261127-100000-q4", {"name": "LFM3-1.7B_Q4_K_M", "gguf": "/m/LFM3-1.7B_Q4_K_M.gguf"}, 78.0, 72.0, 6.0)
+        make_q_run("20261127-110000-q8", {"name": "LFM3-1.7B_Q8_0", "gguf": "/m/LFM3-1.7B_Q8_0.gguf"}, 86.0, 82.0, 10.0)
+        # Reused endpoint name with different GGUF quant must NOT overwrite Q8_0:
+        make_q_run("20261127-120000-bf16", {"name": "LFM3-1.7B", "gguf": "/m/LFM3-1.7B-BF16.gguf"}, 88.0, 84.0, 18.0)
+
+        runs = R.list_runs(qroot)
+        lb = leaderboard.build(runs)
+        self.assertEqual(len(lb["models"]), 3)
+        self.assertEqual(lb["quants"], ["Q4_K_M", "Q8_0", "BF16"])
+        self.assertEqual(lb["families"], ["LFM3-1.7B"])
+        self.assertEqual([(m["base_model"], m["quant"]) for m in lb["models"]],
+                         [("LFM3-1.7B", "BF16"), ("LFM3-1.7B", "Q8_0"), ("LFM3-1.7B", "Q4_K_M")])
+
+        md = leaderboard.to_markdown(lb)
+        self.assertIn("| # | Model | Quant | gScore |", md)
+        self.assertIn("| LFM3-1.7B | Q4_K_M |", md)
+        self.assertIn("| LFM3-1.7B | Q8_0 |", md)
+
+        html_q = leaderboard.to_html(lb, "aurora")
+        self.assertIn("By Quant", html_q)
+        self.assertIn("quant_efficiency", html_q)
+        self.assertIn("Q4_K_M", html_q)
+        self.assertIn("Q8_0", html_q)
+
+        # 4. Export includes base_model & quant metadata columns
+        exp_out = Path(tempfile.mkdtemp()) / "ds_q"
+        export.export(runs, exp_out, "jsonl", False, lambda _m: None)
+        score_rows = [json.loads(x) for x in (exp_out / "data" / "scores.jsonl").read_text().splitlines()]
+        self.assertEqual({r["quant"] for r in score_rows}, {"Q4_K_M", "Q8_0", "BF16"})
+        self.assertEqual({r["base_model"] for r in score_rows}, {"LFM3-1.7B"})
 
 
 if __name__ == "__main__":

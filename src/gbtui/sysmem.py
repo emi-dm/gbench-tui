@@ -46,10 +46,11 @@ def swap_used_bytes() -> int:
         return 0
     try:
         out = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=5).stdout
-        m = re.search(r"used = ([\d.]+)([MG])", out)
+        m = re.search(r"used = ([\d.]+)([KMGT])", out)
         if m:
-            return int(float(m.group(1)) * (GB if m.group(2) == "G" else 1024 ** 2))
-    except (OSError, subprocess.SubprocessError):
+            mult = {"K": 1024, "M": 1024 ** 2, "G": GB, "T": GB * 1024}[m.group(2)]
+            return int(float(m.group(1)) * mult)
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return 0
 
@@ -74,5 +75,5 @@ def check(need_bytes: int, min_free_gb: float) -> str | None:
     left = avail - need_bytes
     if left < min_free_gb * GB:
         return (f"not enough free memory: {fmt(avail)} available, this needs {fmt(need_bytes)} and gbench-tui keeps "
-                f"{min_free_gb:.0f} GB free for the system (Settings → min free memory)")
+                f"{min_free_gb:g} GB free for the system (Settings → min free memory)")
     return None

@@ -1,47 +1,55 @@
 <p align="center">
   <b>A terminal UI for Google DeepMind's <a href="https://github.com/google-deepmind/gbench">gbench</a>:</b>
-  pick your endpoints, run gbench inside Docker Sandboxes, explore every result, export them as a dataset and keep a leaderboard.
+  pick your endpoints and quantizations, run gbench inside Docker Sandboxes, inspect metrics and per-sample verdicts, export datasets and explore an interactive leaderboard.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/backend-gbench-0B57D0" alt="backend: gbench">
-  <img src="https://img.shields.io/badge/sandbox-Docker%20Sandboxes-1A73E8" alt="sandbox: Docker Sandboxes">
-  <img src="https://img.shields.io/badge/host%20deps-none%20(stdlib%20curses)-4285F4" alt="no host dependencies">
-  <img src="https://img.shields.io/badge/license-Apache--2.0-8AB4F8" alt="Apache-2.0">
+  <img src="https://img.shields.io/badge/backend-gbench-4F7CFF" alt="backend: gbench">
+  <img src="https://img.shields.io/badge/sandbox-Docker%20Sandboxes-7C5CFF" alt="sandbox: Docker Sandboxes">
+  <img src="https://img.shields.io/badge/host%20deps-none%20(stdlib%20curses)-F472B6" alt="no host dependencies">
+  <img src="https://img.shields.io/badge/license-Apache--2.0-34D399" alt="Apache-2.0">
 </p>
 
 <p align="center">
   <img src="assets/demo.gif" alt="gbench-tui demo" width="900"><br>
-  <sub>Endpoints → a Golden Set run of LFM3-1.7B in a Docker Sandbox → results, samples and the leaderboard.</sub>
+  <sub>Home (Gemini Aurora) → Endpoints & quantizations → Run config → Suites → Metrics & Formulas → Samples → Leaderboard → live theme switcher.</sub>
 </p>
 
 **gbench-tui** puts a friendly face on [gbench](https://github.com/google-deepmind/gbench), Google DeepMind's open
-benchmarking suite for open models. gbench does all the measuring (its Golden Set, its 90 academic eval suites, its
+benchmarking suite for open models. gbench does all the measuring (its Golden Set, its ~90 academic eval suites, its
 serving benchmarks, its scoring and result files); gbench-tui chooses the flags, runs gbench **always inside a Docker
-Sandbox**, keeps an eye on your machine's memory and turns the results into something you can browse, rank and share.
+Sandbox**, keeps an eye on your machine's memory and turns the results into something you can inspect, rank and share.
 
-- **Endpoints**: any OpenAI-compatible `/v1` server (llama.cpp, vLLM, Ollama, LM Studio, a hosted API), or a local
-  **GGUF** that gbench-tui serves with `llama-server` on demand, sized to the memory you have.
+- **Endpoints & Quantization**: any OpenAI-compatible `/v1` server (llama.cpp, vLLM, Ollama, LM Studio, a hosted API),
+  or local **GGUF** files served with `llama-server` on demand. Quantizations (`Q4_K_M`, `Q6_K`, `Q8_0`, `BF16`, `FP8`,
+  `AWQ`, …) are auto-detected and tracked as a first-class dimension so variants like `LFM3-1.7B_Q4_K_M` and
+  `LFM3-1.7B_Q8_0` are evaluated and compared side by side without overwriting each other.
 - **Run** gbench's three things that make sense on a workstation: the **Golden Set** (16 deterministic capability
-  checks), **academic eval suites** (pick from 90, by pillar; ★ marks the ones that need nothing but an endpoint) and
+  checks), **academic eval suites** (pick from ~90 by pillar; ★ marks the ones that need nothing but an endpoint) and
   **performance on this device** (`--personal`: decode tok/s, time to first token). A **preflight** checks a suite's
   prerequisites without sending a request.
-- **Live view**: gbench's output, progress bars and the current suite while it runs; runs keep going in the background.
-- **Results**: every run with its scores, the per-sample explorer (prompt, reasoning, answer, tool calls, expected
-  answer, why it failed) and gbench's own log.
-- **Leaderboard**: the latest score of every model on every benchmark, ranked by gScore, also written as
-  `leaderboard.md`, `.html` (DeepMind blue and white) and `.json` after every run.
-- **Export as a dataset**: samples and scores as JSONL and/or Parquet with a Hugging Face dataset card, ready for
-  `huggingface-cli upload`.
-- **DeepMind colours**: Google DeepMind's blues and white (deep blue `#0B57D0` → `#1A73E8` → `#4285F4` → white), in
-  the terminal and in the HTML leaderboard.
+- **Live view**: pipeline stages, progress bar with ETA, the current suite and syntax-highlighted streamed logs while a
+  run executes in the background.
+- **Metrics & Formulas**: built-in interactive reference (`m`) showing the exact formula, source and worked example for
+  every metric (`gScore`, `golden_set`, `decode tok/s`, `TTFT`, quantization `bpw` / compactness, host RAM guard), plus
+  a **By Benchmark** tab covering the official scoring metric, sub-metrics and protocol of every `gbench` suite.
+- **Results**: every run with its scores, stacked pass/fail bar, per-sample explorer (prompt, reasoning, response, tool
+  calls, expected answer, why it failed) and gbench's own log.
+- **Leaderboard (TUI + interactive Web)**: latest scores per `(model, quant)` variant ranked by `gScore`, written after
+  every run as `leaderboard.md`, `leaderboard.json` and a 100% offline `leaderboard.html` featuring **Radar** and
+  **Polar Area** circular dimension charts, **Grouped / By Quant / gScore / Speed** bar charts, model & quantization
+  filters and a sortable score matrix.
+- **Export as a dataset**: samples and scores (with `base_model` and `quant` columns) as JSONL and/or Parquet with a
+  Hugging Face dataset card, ready for `huggingface-cli upload`.
+- **5 live colour themes**: `Gemini Aurora` (default), `Cyber Neon`, `Solar Ember`, `Nordic Emerald` and `DeepMind
+  Classic`, switchable live with `t` on Home, in Settings, and inside `leaderboard.html`.
 
 ```text
   host (macOS / Linux)                               Docker Sandbox  gbtui-run-<pid>-<hex>   (microVM, RAM/CPU cap)
  ┌──────────────────────────────┐   sbx exec   ┌──────────────────────────────────────────────────────────────┐
  │ gbench-tui  (curses, stdlib) │ ───────────▶ │ gbench --remote-endpoint http://host:8080/v1 --golden-only … │
- │  endpoints · runs · results  │              │   /opt/gbench   gbench + its eval extras (template)          │
- │  leaderboard · export        │ ◀─────────── │   workspace     ← same host path: HF cache + run's results    │
+ │  endpoints · runs · metrics  │              │   /opt/gbench   gbench + its eval extras (template)          │
+ │  results · leaderboard       │ ◀─────────── │   workspace     ← same host path: HF cache + run's results    │
  └──────────────┬───────────────┘   results    │   network       sbx deny-by-default + endpoint + Hugging Face │
                 │                              └──────────────────────────────────┬───────────────────────────┘
                 ▼  starts on demand                                                │ only allowed host port
@@ -49,7 +57,7 @@ Sandbox**, keeps an eye on your machine's memory and turns the results into some
         or any OpenAI-compatible /v1 server
 ```
 
-**Contents** · [Quick start](#quick-start) · [The TUI](#the-tui) · [What it runs](#what-it-runs) ·
+**Contents** · [Quick start](#quick-start) · [The TUI](#the-tui) · [Screenshots](#screenshots) · [What it runs](#what-it-runs) ·
 [Sandboxes and memory](#docker-sandboxes-and-memory) · [Results, leaderboard and export](#results-leaderboard-and-export) ·
 [Command line](#command-line) · [Example results](#example-lfm3-17b-on-a-macbook) · [Notes](#notes)
 
@@ -67,21 +75,50 @@ gbench-tui setup                    # builds the sandbox template: gbench + its 
 gbench-tui                          # the TUI
 ```
 
-In the TUI: **1** add or pick an endpoint (or a `.gguf`) → **2** run → **3** follow it → **5** results → **6** leaderboard.
+In the TUI: **1** add or pick an endpoint (or `.gguf` quant) → **2** run → **3** follow it → **5** results → **6** leaderboard (`m` anytime for metrics & formulas, `t` on Home to cycle themes).
 
 ## The TUI
 
 | Key | Screen | What you do there |
 |---|---|---|
-| `1` | **Endpoints** | Add a server (`a`) or a GGUF (`g`), set the model id (`--models`) and tokenizer (`--tokenizer`), start/stop its llama-server (`s`), test it (`t`: lists the models and asks for one completion), choose the active one (`Space`). API keys are referenced by environment variable name, never stored. |
-| `2` | **Run** | Endpoint, what to run (Golden Set, eval suites, performance, preflight), suites, samples per suite (`--eval-limit`), max output tokens, thinking, temperature, concurrency, sandbox RAM. The exact gbench command and a memory check are shown before you start. |
-| `3` | **Live run** | Phase, progress, the current suite, gbench's output; `c` cancels (gbench stops and its sandbox is removed), `b` leaves it running in the background. |
-| `4` | **Suites** | gbench's Golden Set cases and all eval suites by pillar, each with what it needs (Docker image, Gemini key, logprobs, long context, vision, tool calls) and gbench's own setup and scoring guide. `Space` adds a suite to the next run. |
-| `5` | **Results** | Every run; `Enter` for its scores, again for its samples (`f`: failures only), again for one sample in full. `m` marks runs, `x` exports them, `l` shows gbench's log, `D` deletes. |
-| `6` | **Leaderboard** | Models ranked by gScore with a heat map per benchmark and the sample count of each score; `c` keeps only results gbench marks leaderboard-comparable, `o` opens the HTML. |
-| `7` | **Export** | Runs → a dataset folder (JSONL / Parquet + dataset card). |
-| `8` | **Sandbox** | The template (`b` builds it), live sandboxes, `p` prunes the ones left by a dead process. |
-| `9` | **Settings** | Sandbox RAM / CPUs, the memory kept free for the system, results folder. |
+| `1` | **Endpoints** | Add a server (`a`) or a GGUF (`g`), auto-detect or edit its quantization (`Q4_K_M`, `Q8_0`, `BF16`, …), model id (`--models`) and tokenizer (`--tokenizer`), start/stop `llama-server` (`s`), test it (`t`), choose active (`Space`). API keys are referenced by env var name, never stored. |
+| `2` | **Run** | Endpoint, tier (Golden Set, eval suites, performance, preflight), suites, samples per suite (`--eval-limit`), max output tokens, thinking, temperature, concurrency, sandbox RAM. Shows the highlighted `gbench` command and projected host RAM before launch. |
+| `3` | **Live run** | 5-stage pipeline, progress bar with ETA, current suite, syntax-highlighted streamed logs (`w` wrap, `f` follow); `c` cancels, `b` leaves it running in the background. |
+| `4` | **Suites** | gbench's Golden Set cases and all ~90 eval suites by pillar, with prerequisites (`docker image`, `Gemini key`, `logprobs`, `vision`, `tool calls`), primary metric badge, `Enter` for guide, `m` for metric breakdown, `Space` to queue. |
+| `m` | **Metrics** | Two-tab reference: **Core Formulas** (`gScore`, `golden_set`, `decode tok/s`, `TTFT`, quantization `bpw` / compactness, Radar normalization, RAM guard + live `#1` example) and **By Benchmark** (scoring metric, sub-metrics & protocol for every gbench suite), plus `b` for the quantization `bpw` scale. |
+| `5` | **Results** | Every run with quantization column and `/` search; `Enter` for scores (`m` jumps to that benchmark's metric), `Enter` again for samples (`f` cycles all/fail/pass), `Enter` again for full prompt/reasoning/response (`n`/`p` steps between samples). |
+| `6` | **Leaderboard** | `(model, quant)` variants ranked by `gScore` with heat map, `/` filter, `c` comparable-only, `m` metrics, `o` opens the interactive HTML dashboard. |
+| `7` | **Export** | Runs → a dataset folder (JSONL / Parquet + Hugging Face dataset card, including `base_model` and `quant`). |
+| `8` | **Sandbox** | The template (`b` builds it), catalog refresh (`c`), live sandboxes, `p` prunes leftovers from dead processes. |
+| `9` | **Settings** | Live-preview colour theme switcher (5 palettes), sandbox RAM / CPUs, host memory reserve, results folder. |
+
+## Screenshots
+
+### Terminal UI
+
+| Home (`Gemini Aurora`) | Endpoints & Quantization |
+| :---: | :---: |
+| ![Home](assets/screenshots/01-home.png) | ![Endpoints](assets/screenshots/02-endpoints.png) |
+| **Run Configuration & Preflight** | **Suites Browser (90+ suites & metric badges)** |
+| ![Run](assets/screenshots/03-run.png) | ![Suites](assets/screenshots/04-suites.png) |
+| **Metrics · Core Formulas (with live `#1` example)** | **Metrics · By Benchmark (per-suite scoring & sub-metrics)** |
+| ![Metrics Core](assets/screenshots/05-metrics.png) | ![Metrics By Benchmark](assets/screenshots/06-metrics-benchmarks.png) |
+| **Results · Per-Sample Verdicts Explorer** | **Leaderboard (multi-quant ranking & heatmap)** |
+| ![Results Samples](assets/screenshots/07-results-samples.png) | ![TUI Leaderboard](assets/screenshots/08-leaderboard-tui.png) |
+
+### Interactive Web Leaderboard (`leaderboard.html`)
+
+Generated automatically after every run (100% self-contained inline SVG + vanilla JS — works offline via `file://`), with live theme switching, model & quantization filters, **Radar / Polar Area** circular charts and **Benchmarks / By Quant / gScore / Speed** bar charts:
+
+<p align="center">
+  <img src="assets/screenshots/09-web-radar-bars.png" alt="Web Leaderboard — Radar Area Chart and Grouped Bar Chart" width="900"><br>
+  <sub>Radar Area Chart (eval dimensions + quantization compactness) & grouped benchmark bar chart with interactive model/quant filters.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/10-web-polar-quant.png" alt="Web Leaderboard — Polar Area Chart and By Quant Bar Chart" width="900"><br>
+  <sub>Polar Area (Nightingale) dimension chart & <b>By Quant</b> comparison bars (<code>Q4_K_M</code> → <code>Q6_K</code> → <code>Q8_0</code>) + sortable Score Matrix.</sub>
+</p>
 
 ## What it runs
 
@@ -119,8 +156,8 @@ every score so that a 20-sample score is never mistaken for a full run.
 
 ```text
 ~/.local/share/gbench-tui/
-├── results/<date>-<endpoint>-<tier>/
-│   ├── gbtui.json          what was asked (endpoint, flags), how it ended, sandbox size, gbench commit
+├── results/<date>-<endpoint>-<quant>-<tier>/
+│   ├── gbtui.json          what was asked (endpoint, quant, flags), how it ended, sandbox size, gbench commit
 │   ├── gbench.log          gbench's console output
 │   ├── metadata.json       ┐
 │   ├── summary.json        │ gbench's own files, untouched
@@ -129,21 +166,23 @@ every score so that a 20-sample score is never mistaken for a full run.
 ├── leaderboard.md / .html / .json
 ```
 
-The **dataset export** writes `data/samples.(jsonl|parquet)` (one row per sample: run, model, suite, category, prompt,
-messages, reasoning, response, tool calls, gold answer, correct, status, detail, finish reason, tokens),
-`data/scores.(jsonl|parquet)` (one row per run and benchmark) and a `README.md` dataset card with `configs` for
+The **dataset export** writes `data/samples.(jsonl|parquet)` (one row per sample: run, model, `base_model`, `quant`,
+suite, category, prompt, messages, reasoning, response, tool calls, gold answer, correct, status, detail, finish reason,
+tokens), `data/scores.(jsonl|parquet)` (one row per run and benchmark) and a `README.md` dataset card with `configs` for
 `datasets.load_dataset`. Parquet uses pyarrow on the host if present, otherwise the sandbox's.
 
 ## Command line
 
 ```bash
 gbench-tui setup                                   # build the sandbox template (gbench + eval extras) and the catalog
-gbench-tui endpoints                               # list endpoints and probe them
-gbench-tui serve lfm3-1.7b                         # start llama-server for an endpoint's GGUF (--stop to stop it)
+gbench-tui endpoints                               # list endpoints (with quantization) and probe them
+gbench-tui serve lfm3-1.7b-q8_0                    # start llama-server for an endpoint's GGUF (--stop to stop it)
 gbench-tui run --tier golden                       # Golden Set on the active endpoint
 gbench-tui run --tier evals --evals gsm8k ifeval --limit 20
 gbench-tui run --tier perf                         # --personal: decode tok/s, TTFT
-gbench-tui results                                 # every run with its headline
+gbench-tui metrics                                 # print all metric formulas and calculations
+gbench-tui metrics ifeval                          # inspect a specific benchmark's scoring metric & protocol
+gbench-tui results                                 # every run with its quantization and headline
 gbench-tui leaderboard                             # print and write leaderboard.md/.html/.json
 gbench-tui export ~/datasets/lfm3 --format both    # samples + scores as a dataset
 gbench-tui prune                                   # remove sandboxes left by dead processes
@@ -178,8 +217,8 @@ leaderboard number; the leaderboard shows the sample count beside every score fo
   `sbx logout --yes && sbx login`, then `sbx daemon restart`.
 - The datasets behind each suite have their own licenses (gbench's `docs/THIRD_PARTY_DATASETS.md`); check them before
   publishing an exported dataset.
-- Inspired by [slmbench](https://github.com/emi-dm/slm-bench)'s TUI. Not affiliated with Google DeepMind; "DeepMind
-  colours" means the palette only.
+- Inspired by [slmbench](https://github.com/emi-dm/slm-bench)'s TUI. Not affiliated with Google DeepMind; `DeepMind Classic`
+  is available alongside the prism themes via `t` on Home or in Settings.
 
 ## License
 

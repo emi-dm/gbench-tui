@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import argparse
 import signal
-import sys
 import time
+from pathlib import Path
 
-from . import __version__, config, export, leaderboard, results as R, runner, sandbox, servers
+from . import __version__, config, export, leaderboard, metrics, results as R, runner, sandbox, servers
 
 
 def _p(*a):
@@ -30,14 +30,23 @@ def cmd_run(a, s) -> int:
         _p(f"✗ no endpoint {a.endpoint or s.active!r} (gbench-tui endpoints)")
         return 2
     d = s.run
-    spec = runner.RunSpec(endpoint=ep, tier=a.tier or d.tier, evals=a.evals or d.evals,
-                          golden_tasks=a.golden_tasks or d.golden_tasks,
-                          eval_limit=d.eval_limit if a.limit is None else a.limit,
-                          max_output_tokens=a.max_output_tokens or d.max_output_tokens,
-                          thinking=a.thinking or d.thinking, temperature=a.temperature or d.temperature,
-                          concurrency=a.concurrency or d.concurrency, suite_timeout=d.suite_timeout,
-                          perf_mode=a.perf_mode or d.perf_mode)
-    if a.memory:
+    spec = runner.RunSpec(
+        endpoint=ep,
+        tier=a.tier or d.tier,
+        evals=a.evals or d.evals,
+        golden_tasks=a.golden_tasks or d.golden_tasks,
+        eval_limit=d.eval_limit if a.limit is None else max(0, a.limit),
+        max_output_tokens=d.max_output_tokens if a.max_output_tokens is None else max(1, a.max_output_tokens),
+        thinking=d.thinking if a.thinking is None else a.thinking,
+        temperature=d.temperature if a.temperature is None else a.temperature,
+        concurrency=d.concurrency if a.concurrency is None else max(1, a.concurrency),
+        suite_timeout=d.suite_timeout,
+        perf_mode=a.perf_mode or d.perf_mode,
+    )
+    if a.memory is not None:
+        if a.memory < 2:
+            _p("✗ --memory must be at least 2 GB")
+            return 2
         s.sandbox_memory_gb = a.memory
     _p("gbench " + runner.command_preview(spec).removeprefix("gbench "))
     why = runner.start(spec, s)
@@ -46,23 +55,31 @@ def cmd_run(a, s) -> int:
         return 2
     signal.signal(signal.SIGTERM, lambda *_: runner.cancel())
     shown = 0
+
+    def flush():
+        nonlocal shown
+        snap = runner.snapshot()
+        start_idx = max(0, shown - snap["dropped"])
+        lines = snap["lines"]
+        for ln in lines[start_idx:]:
+            _p(ln)
+        shown = snap["dropped"] + len(lines)
+        return snap
+
     try:
-        while runner.LIVE.active or shown < len(runner.LIVE.lines):
-            lines = runner.LIVE.lines
-            while shown < len(lines):
-                _p(lines[shown])
-                shown += 1
+        while True:
+            snap = flush()
+            if not snap["active"]:
+                break
             time.sleep(0.4)
     except KeyboardInterrupt:
         _p("■ cancelling…")
         runner.cancel()
-        while runner.LIVE.active:
-            time.sleep(0.5)
-    while shown < len(runner.LIVE.lines):
-        _p(runner.LIVE.lines[shown])
-        shown += 1
-    if runner.LIVE.result_dir:
-        run = R.load_run(__import__("pathlib").Path(runner.LIVE.result_dir))
+        runner.wait(timeout=30)
+    runner.wait(timeout=30)
+    snap = flush()
+    if snap["result_dir"]:
+        run = R.load_run(Path(snap["result_dir"]))
         if run:
             _p(f"\nresults: {run.path}")
             for sc in run.scores:
@@ -70,7 +87,7 @@ def cmd_run(a, s) -> int:
                 _p(f"  {sc.kind:<7} {sc.name:<28} {v:>12}  n={sc.n} {sc.status}")
     if a.stop_server and ep.gguf:
         servers.stop_server(ep)
-    return 0 if runner.LIVE.phase == "done" else 1
+    return 0 if snap["phase"] == "done" else 1
 
 
 def main(argv=None):
@@ -92,7 +109,7 @@ def main(argv=None):
     r.add_argument("--max-output-tokens", type=int)
     r.add_argument("--concurrency", type=int)
     r.add_argument("--temperature")
-    r.add_argument("--thinking", action="store_true")
+    r.add_argument("--thinking", action=argparse.BooleanOptionalAction, default=None)
     r.add_argument("--perf-mode", choices=["personal", "quick"])
     r.add_argument("--memory", type=int, help="sandbox RAM in GB")
     r.add_argument("--stop-server", action="store_true", help="stop llama-server when the run ends")
@@ -105,7 +122,12 @@ def main(argv=None):
     ex.add_argument("--failures", action="store_true")
     ex.add_argument("--runs", nargs="+")
     sub.add_parser("prune", help="remove sandboxes left by dead processes")
+    mt = sub.add_parser("metrics", help="show every metric or a specific benchmark's scoring formula")
+    mt.add_argument("target", nargs="?", help="optional benchmark name (e.g. gsm8k, ifeval, causalbench)")
     a = ap.parse_args(argv)
+    if a.cmd == "metrics":
+        _p(metrics.format_plain(a.target).rstrip())
+        return 0
     s = config.load()
 
     if a.cmd is None:
@@ -119,8 +141,9 @@ def main(argv=None):
     if a.cmd == "endpoints":
         for e in s.endpoints:
             pr = servers.probe(e, timeout=2)
-            _p(f"{'★' if e.name == s.active else ' '} {e.name:<20} {e.base_url:<32} model={e.model or '-'} "
-               f"tokenizer={e.tokenizer or '-'} {'● ' + ','.join(pr['models'][:3]) if pr['ok'] else '○ ' + pr['error']}")
+            _p(f"{'★' if e.name == s.active else ' '} {e.name:<22} {e.base_url:<32} model={e.model or '-'} "
+               f"quant={e.effective_quant or '-'} tokenizer={e.tokenizer or '-'} "
+               f"{'● ' + ','.join(pr['models'][:3]) if pr['ok'] else '○ ' + pr['error']}")
         return 0
     if a.cmd == "serve":
         e = s.endpoint(a.name)
@@ -134,10 +157,11 @@ def main(argv=None):
         _p(("✗ " + why) if why else f"✔ llama-server ready on {e.base_url}")
         return 2 if why else 0
     if a.cmd == "run":
-        sys.exit(cmd_run(a, s))
+        return cmd_run(a, s)
     if a.cmd == "results":
         for run in R.list_runs(s.results_path):
-            _p(f"{run.id:<48} {run.status:<9} {run.headline}")
+            q = f"[{run.quant}] " if run.quant else ""
+            _p(f"{run.id:<48} {run.status:<9} {q}{run.headline}")
         return 0
     if a.cmd == "leaderboard":
         lbd = leaderboard.write(s, a.comparable)
@@ -148,7 +172,10 @@ def main(argv=None):
         runs = R.list_runs(s.results_path)
         if a.runs:
             runs = [r for r in runs if r.id in a.runs]
-        export.export(runs, __import__("pathlib").Path(a.out).expanduser(), a.format, a.failures, _p)
+            if not runs:
+                _p(f"✗ no matching runs found for: {', '.join(a.runs)}")
+                return 2
+        export.export(runs, Path(a.out).expanduser(), a.format, a.failures, _p)
         return 0
     if a.cmd == "prune":
         _p(f"removed: {', '.join(sandbox.prune()) or 'nothing'}")
@@ -157,4 +184,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

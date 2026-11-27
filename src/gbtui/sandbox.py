@@ -20,9 +20,11 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import tarfile
+import urllib.parse
 from pathlib import Path
 
 from .config import cache_dir, config_dir
@@ -108,17 +110,22 @@ def signed_in() -> bool:
     try:
         r = sbx("diagnose", timeout=90)
         ok = "✗ Authentication" not in _out(r)
+        if ok:
+            _signed["ok"] = True
+        return ok
     except (OSError, subprocess.SubprocessError):
-        ok = True                                    # unknown: let create report it
-    _signed["ok"] = ok
-    return ok
+        return True                                  # unknown: let create report it without permanently caching
 
 
 def sandboxes() -> list[dict]:
     try:
         r = sbx("ls", "--json", timeout=30)
         data = json.loads(r.stdout or "[]") if r.returncode == 0 else []
-        return data if isinstance(data, list) else data.get("sandboxes", [])
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+        if isinstance(data, dict):
+            return [x for x in (data.get("sandboxes") or []) if isinstance(x, dict)]
+        return []
     except (OSError, subprocess.SubprocessError, ValueError):
         return []
 
@@ -127,7 +134,11 @@ def templates() -> list[str]:
     try:
         r = sbx("template", "ls", "--json", timeout=60)
         data = json.loads(r.stdout or "[]") if r.returncode == 0 else []
-        return [f"{t.get('repository')}:{t.get('tag')}" for t in data]
+        if isinstance(data, dict):
+            data = data.get("templates") or []
+        if not isinstance(data, list):
+            return []
+        return [f"{t.get('repository')}:{t.get('tag')}" for t in data if isinstance(t, dict)]
     except (OSError, subprocess.SubprocessError, ValueError):
         return []
 
@@ -248,16 +259,27 @@ def host_alias() -> str:
 
 def sandbox_url(base_url: str) -> str:
     """The endpoint URL as seen from inside the sandbox: localhost becomes the host alias."""
-    return re.sub(r"//(127\.0\.0\.1|localhost|0\.0\.0\.0)(?=[:/])", "//" + host_alias(), base_url)
+    return re.sub(r"//(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])(?=[:/]|$)", "//" + host_alias(), base_url.strip())
 
 
 def allow_for(base_url: str) -> list[str]:
     """Network allow rules for a run against base_url (plus the dataset hosts)."""
-    hostport = sandbox_url(base_url).split("//", 1)[-1].split("/", 1)[0]
-    host = hostport.split(":")[0]
-    rules = [hostport] if ":" in hostport else [host + ":443", host + ":80"]
+    surl = sandbox_url(base_url)
+    p = urllib.parse.urlparse(surl if "://" in surl else "http://" + surl)
+    host = p.hostname or ""
+    if not host:
+        return list(RUN_HOSTS)
+    try:
+        port = p.port
+    except ValueError:
+        port = None
+    hfmt = f"[{host}]" if ":" in host else host
+    rules = [f"{hfmt}:{port}"] if port is not None else [f"{hfmt}:443", f"{hfmt}:80"]
     if host == host_alias():
-        rules.append(hostport.replace(host, "localhost"))
+        if port is not None:
+            rules.append(f"localhost:{port}")
+        else:
+            rules += ["localhost:443", "localhost:80"]
     return rules + RUN_HOSTS
 
 
@@ -382,7 +404,7 @@ for req in tomllib.load(open("/opt/gbench-src/pyproject.toml", "rb"))["project"]
     if re.split(r"[<>=!~\[; ]", req, maxsplit=1)[0].lower() not in skip:
         print(req)
 PYEOF
-/tmp/uvenv/bin/uv pip install -q --python {VENV}/bin/python /opt/gbench-src -r /tmp/extras.txt {' '.join(repr(p) for p in EXTRA_PIP)}
+/tmp/uvenv/bin/uv pip install -q --python {VENV}/bin/python /opt/gbench-src -r /tmp/extras.txt {' '.join(shlex.quote(p) for p in EXTRA_PIP)}
 rm -rf /tmp/uvenv
 # ifeval & co. need nltk's punkt; nltk refuses proxied downloads unless told the proxy (sbx's) is trusted
 NLTK_ALLOW_PROXIED_URLOPEN=1 {VENV}/bin/python -m nltk.downloader -q -d /opt/nltk_data punkt punkt_tab
@@ -423,8 +445,9 @@ echo {VERSION} > {MARKER}
         destroy(BUILDER)
     if ok:
         for old in templates():                   # older gbtui-gbench:vN templates: disk only
-            repo = TEMPLATE.split(":")[0]
-            if (old.split(":")[0] == repo or old.split(":")[0].endswith("/" + repo)) and not _same(old, TEMPLATE):
+            repo = TEMPLATE.rsplit(":", 1)[0]
+            old_repo = old.rsplit(":", 1)[0]
+            if (old_repo == repo or old_repo.endswith("/" + repo)) and not _same(old, TEMPLATE):
                 sbx("template", "rm", old, timeout=300)
                 on_line(f"removed the old template {old}")
         refresh_catalog(on_line)
