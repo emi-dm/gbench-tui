@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/demo.gif" alt="gbench-tui demo" width="900"><br>
+  <img src="assets/demo-aurora.gif" alt="gbench-tui demo" width="900"><br>
   <sub>Home (Gemini Aurora) → Endpoints & quantizations → Run config → Suites → Metrics & Formulas → Samples → Leaderboard → live theme switcher.</sub>
 </p>
 

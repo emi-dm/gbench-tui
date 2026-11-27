@@ -1,5 +1,5 @@
 # gbench-tui demo: `vhs assets/demo.tape` from the repo root
-Output assets/demo.gif
+Output assets/demo-aurora.gif
 
 Set Shell "bash"
 Set FontSize 15
