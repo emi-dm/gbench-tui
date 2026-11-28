@@ -111,6 +111,7 @@ class UI:
         with contextlib.suppress(curses.error):
             curses.use_default_colors()
         self._pairs: dict = {}
+        self._pairs_theme: str = T.current_theme()
         self.status_fn = None              # () -> list of (text, colour) for the right side of the footer
         self._toast: tuple | None = None   # (text, color, expires_at)
 
@@ -119,6 +120,12 @@ class UI:
         return self.scr.getmaxyx()
 
     def color(self, fg=None, bg=None, bold=False, dim=False, auto_sel=True) -> int:
+        cur_theme = T.current_theme()
+        if self._pairs_theme != cur_theme:
+            # Reset pair slots on theme switch so scrolling through all 17 themes live never overflows
+            # macOS ncurses' 255-pair 8-bit A_COLOR table into A_STANDOUT (reverse video).
+            self._pairs.clear()
+            self._pairs_theme = cur_theme
         if auto_sel and bg == T.SEL and fg is not None:
             fg = T.on_sel(fg)
         use_256 = getattr(curses, "COLORS", 8) >= 256
@@ -127,7 +134,8 @@ class UI:
         key = (cfg, cbg)
         if key not in self._pairs:
             n = len(self._pairs) + 1
-            if n >= getattr(curses, "COLOR_PAIRS", 64):
+            max_pairs = min(getattr(curses, "COLOR_PAIRS", 64), 255)
+            if n >= max_pairs:
                 return (curses.A_BOLD if bold else 0) | (curses.A_DIM if dim else 0)
             try:
                 curses.init_pair(n, cfg, cbg)
@@ -195,15 +203,15 @@ class UI:
             self.put(y, x + j, ch, self.color(col, None, False, auto_sel=False))
 
     def pill(self, y, x, text, fg=None, bg=None, bold=True, maxw=None):
-        """Draws a solid high-contrast badge ` text `."""
-        fg = T.INK if fg is None else fg
+        """Draws a solid high-contrast badge ` text ` (auto-picks dark/light ink via WCAG luminance)."""
         bg = T.CYAN if bg is None else bg
+        fg = T.contrast_fg(bg) if fg in (None, T.INK, T.LIGHT) else fg
         return self.put(y, x, f" {text} ", self.color(fg, bg, bold, auto_sel=False), maxw=maxw)
 
     def soft_pill(self, y, x, text, fg=None, bg=None, bold=True, maxw=None):
         """Draws a subtle tinted chip ` text ` on an elevated slate surface."""
-        fg = T.ICE if fg is None else fg
         bg = T.BAR_ALT if bg is None else bg
+        fg = T.readable_accent(T.ICE if fg is None else fg, on_bg=bg)
         return self.put(y, x, f" {text} ", self.color(fg, bg, bold, auto_sel=False), maxw=maxw)
 
     # ---------- chrome: header, footer, toast ----------
@@ -215,7 +223,8 @@ class UI:
         bgrad = T.BRAND_GRAD or T.GRADIENT
         for i, ch in enumerate(badge):                   # Multi-stop theme prism badge
             bi = min(len(bgrad) - 1, int(i * len(bgrad) / max(1, len(badge))))
-            self.put(0, i, ch, self.color(T.LIGHT, bgrad[bi], True, auto_sel=False))
+            bg_c = bgrad[bi]
+            self.put(0, i, ch, self.color(T.contrast_fg(bg_c), bg_c, True, auto_sel=False))
         x = len(badge)
         self.put(0, x, "▌", self.color(T.PINK if T.ACTIVE != "deepmind" else T.CYAN, T.BAR, True, auto_sel=False))
         x += 2
@@ -668,13 +677,21 @@ class UI:
             with contextlib.suppress(curses.error):
                 curses.curs_set(0)
 
-    def choose(self, title, items, sel=0, hint=""):
-        """items: [(value, label, sublabel)] → value or None."""
+    def choose(self, title, items, sel=0, hint="", on_move=None, on_redraw=None):
+        """items: [(value, label, sublabel)] → value or None.
+
+        Optional `on_move(value)` fires whenever selection changes (e.g. live theme preview) and `on_redraw()`
+        repaints the background screen underneath the modal before drawing the dialog.
+        """
         if not items:
             return None
         top = 0
         sel = max(0, min(sel, len(items) - 1))
+        if on_move:
+            on_move(items[sel][0])
         while True:
+            if on_redraw:
+                on_redraw()
             h, w = self.size()
             ww = min(w - 2, max(36, max(disp_w(_clean(i[1])) + disp_w(_clean(i[2] if len(i) > 2 else "")) for i in items) + 12))
             hh = max(5, min(h - 2, len(items) + 5))
@@ -702,6 +719,7 @@ class UI:
             if k == "RESIZE":
                 self.scr.erase()
                 continue
+            prev_sel = sel
             if k in (curses.KEY_UP, "k"):
                 sel = (sel - 1) % len(items)
             elif k in (curses.KEY_DOWN, "j"):
@@ -714,6 +732,8 @@ class UI:
                 return items[sel][0]
             elif k in (ESC, SIGINT, "q"):
                 return None
+            if sel != prev_sel and on_move:
+                on_move(items[sel][0])
 
     def busy(self, text, fn, *args, **kw):
         """Runs fn in a thread with an animated prism wave dialog and elapsed timer; returns its result."""

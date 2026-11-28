@@ -1,17 +1,17 @@
-"""Where gbench runs: always inside a Docker Sandbox (`sbx` microVM), never on the host.
+"""Where gbench runs: always inside an ephemeral, hardened Docker container, never on the host.
 
-    host: gbench-tui (curses, stdlib only) ── llama-server (Metal) or any /v1 endpoint
-            │ sbx exec                                ▲
-            ▼                                         │ the only host port the sandbox may reach
-    sbx  gbtui-run-<pid>-<hex>  ← from the template gbtui-gbench:v<N>, its own RAM/CPU cap
-         ├─ /opt/gbench (venv): gbench + its eval extras, the backend that does all the work
-         ├─ ~/.cache/gbench-tui/work  (workspace, same path inside): HF cache and the run's results
-         └─ network: sbx deny-by-default + only the endpoint and the dataset hosts (Hugging Face, GitHub raw)
+    host: gbench-tui (curses, stdlib only) ── llama-server (Metal/CUDA) or any /v1 endpoint
+            │ docker exec                                ▲
+            ▼                                            │ host.docker.internal:<port>
+    docker  gbtui-run-<pid>-<hex>  ← from image gbtui-gbench:v<N>, RAM/CPU/PID capped
+            ├─ /opt/gbench (venv): gbench + its eval extras, the backend that does all the work
+            ├─ /work  ← ~/.cache/gbench-tui/work (HF cache + run results; never mounts $HOME or docker.sock)
+            └─ hardened: --read-only, --cap-drop=ALL, no-new-privileges, non-root UID:GID, --network=none when offline
 
-`setup()` builds the template once: a builder sandbox installs gbench from a pinned checkout (PyPI only, meanwhile),
-dumps gbench's own suite / Golden Set catalog to JSON, is saved with `sbx template save` and removed. Every run then
-gets a fresh sandbox from the template, removed when the run ends (finished, failed or cancelled); one left behind by a
-process that died is pruned the next time a sandbox is created.
+`setup()` builds the Docker image once from a pinned checkout of gbench, dumps gbench's own suite / Golden Set catalog
+to JSON (inside an offline container), and removes any older `gbtui-gbench:v*` image. Every run then gets a fresh
+container from the image, removed when the run ends (finished, failed or cancelled); one left behind by a process that
+died is pruned automatically on the next run.
 """
 from __future__ import annotations
 
@@ -24,47 +24,45 @@ import shlex
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import urllib.parse
 from pathlib import Path
 
 from .config import cache_dir, config_dir
 
-VERSION = "2"
-TEMPLATE = os.environ.get("GBTUI_TEMPLATE") or f"gbtui-gbench:v{VERSION}"
-BUILDER = "gbtui-build"
+VERSION = "3"
+IMAGE = os.environ.get("GBTUI_IMAGE") or os.environ.get("GBTUI_TEMPLATE") or f"gbtui-gbench:v{VERSION}"
+TEMPLATE = IMAGE                                # backwards-compatible alias
+BASE_IMAGE = os.environ.get("GBTUI_BASE_IMAGE") or "python:3.12-slim"
 PREFIX = "gbtui-run-"
 GBENCH_REPO = "https://github.com/google-deepmind/gbench"
 GBENCH_REF = os.environ.get("GBTUI_GBENCH_REF", "main")
 VENV = "/opt/gbench"
 PYTHON = "3.12"
-# The workspace: sbx mounts it at the same path inside the sandbox (HF cache and in-flight results)
+CONTAINER_WORK = "/work"
+# Host directory bind-mounted at CONTAINER_WORK inside each container (HF cache and in-flight results)
 WORK = str(cache_dir() / "work")
 MARKER = "/etc/gbtui-sandbox"
-BUILD_MEMORY = "4g"
-# Hosts the builder may reach while installing (then denied again)
-BUILD_HOSTS = ["pypi.org", "files.pythonhosted.org", "raw.githubusercontent.com", "github.com",
-               "objects.githubusercontent.com", "release-assets.githubusercontent.com", "astral.sh", "deb.debian.org",
-               "ports.ubuntu.com", "archive.ubuntu.com", "security.ubuntu.com"]
-# Hosts a run may reach besides the endpoint: datasets and tokenizers
+PIDS_LIMIT = 256
+# Hosts a run typically reaches besides the endpoint: datasets and tokenizers
 RUN_HOSTS = ["huggingface.co", "**.huggingface.co", "**.hf.co", "raw.githubusercontent.com", "github.com",
              "objects.githubusercontent.com", "release-assets.githubusercontent.com", "data.statmt.org"]
-# python packages installed next to gbench[evals]: the tokenizer stack (no torch) for --tokenizer
+# Python packages installed next to gbench[evals]: the tokenizer stack (no torch) for --tokenizer
 EXTRA_PIP = ["transformers<6", "jinja2"]
-# gbench[evals] packages left out: no wheel for linux/aarch64 (the sandbox's arch) and no sdist. Only
-# gorilla_apibench imports them; gbench reports that suite as infra_required instead.
-SKIP_EXTRAS = ["tree-sitter", "tree-sitter-python"]
+# gbench[evals] packages skipped on linux/arm64 (no wheel and no sdist; only gorilla_apibench imports them)
+SKIP_EXTRAS_ARM64 = ["tree-sitter", "tree-sitter-python"]
 
 _SECRET = re.compile(r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|AUTH", re.I)
 
 
 def _env() -> dict:
-    """The environment sbx is started with: the user's, minus anything that looks like a secret."""
+    """The environment docker is started with: the user's, minus anything that looks like a secret."""
     return {k: v for k, v in os.environ.items() if not _SECRET.search(k)}
 
 
-def sbx(*args, timeout: float = 120, input: bytes | None = None, text: bool = True) -> subprocess.CompletedProcess:
+def docker(*args, timeout: float = 120, input: bytes | None = None, text: bool = True) -> subprocess.CompletedProcess:
     kw = {"input": input} if input is not None else {}
-    return subprocess.run(["sbx", "--no-input", *args], capture_output=True, text=text and input is None,
+    return subprocess.run(["docker", *args], capture_output=True, text=text and input is None,
                           timeout=timeout, env=_env(), **kw)
 
 
@@ -77,69 +75,39 @@ def _out(r: subprocess.CompletedProcess) -> str:
 # status
 # ------------------------------------------------------------------------------------------------
 def installed() -> bool:
-    return shutil.which("sbx") is not None
+    return shutil.which("docker") is not None
 
 
 def status() -> str | None:
     """None when runs can start; otherwise a short reason."""
     if not installed():
-        return "Docker Sandboxes (sbx) is not installed: brew install docker/tap/sbx"
+        return "Docker is not installed (install Docker Desktop, OrbStack, Colima, or Docker Engine)"
     try:
-        r = sbx("ls", "--json", timeout=30)
+        r = docker("info", "--format", "{{.ServerVersion}}", timeout=20)
     except (OSError, subprocess.SubprocessError) as e:
-        return f"sbx not answering: {e}"
+        return f"Docker not answering: {e}"
     if r.returncode != 0:
-        out = _out(r)
-        if "not signed in" in out or "login" in out:
-            return "Docker Sandboxes needs a sign-in: run `sbx login` once"
-        return "sbx daemon not running (sbx daemon start): " + out.strip()[-160:]
-    if not signed_in():
-        return "Docker Sandboxes needs a sign-in: run `sbx login` once"
+        out = _out(r).strip().splitlines()
+        msg = out[-1][-160:] if out else "daemon not reachable"
+        return f"Docker daemon not running (start Docker Desktop / OrbStack / Colima): {msg}"
     if not template_ready():
-        return "sandbox template not built yet (Sandbox → Build template, or `gbench-tui setup`)"
+        return "Docker image not built yet (Sandbox → Build image, or `gbench-tui setup`)"
     return None
 
 
-_signed: dict = {}
-
-
-def signed_in() -> bool:
-    """`sbx create` needs a Docker sign-in; `sbx diagnose` says whether there is one (cached once it is true)."""
-    if _signed.get("ok"):
-        return True
-    try:
-        r = sbx("diagnose", timeout=90)
-        ok = "✗ Authentication" not in _out(r)
-        if ok:
-            _signed["ok"] = True
-        return ok
-    except (OSError, subprocess.SubprocessError):
-        return True                                  # unknown: let create report it without permanently caching
-
-
-def sandboxes() -> list[dict]:
-    try:
-        r = sbx("ls", "--json", timeout=30)
-        data = json.loads(r.stdout or "[]") if r.returncode == 0 else []
-        if isinstance(data, list):
-            return [x for x in data if isinstance(x, dict)]
-        if isinstance(data, dict):
-            return [x for x in (data.get("sandboxes") or []) if isinstance(x, dict)]
-        return []
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return []
-
-
 def templates() -> list[str]:
+    """Local Docker images as `repository:tag`."""
     try:
-        r = sbx("template", "ls", "--json", timeout=60)
-        data = json.loads(r.stdout or "[]") if r.returncode == 0 else []
-        if isinstance(data, dict):
-            data = data.get("templates") or []
-        if not isinstance(data, list):
+        r = docker("images", "--format", "{{.Repository}}:{{.Tag}}", timeout=30)
+        if r.returncode != 0:
             return []
-        return [f"{t.get('repository')}:{t.get('tag')}" for t in data if isinstance(t, dict)]
-    except (OSError, subprocess.SubprocessError, ValueError):
+        out = []
+        for line in (r.stdout or "").splitlines():
+            ref = line.strip()
+            if ref and "<none>" not in ref:
+                out.append(ref)
+        return out
+    except (OSError, subprocess.SubprocessError):
         return []
 
 
@@ -148,7 +116,52 @@ def _same(ref: str, want: str) -> bool:
 
 
 def template_ready() -> bool:
-    return any(_same(t, TEMPLATE) for t in templates())
+    try:
+        r = docker("image", "inspect", IMAGE, timeout=20)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _parse_labels(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in str(raw or "").split(","):
+        if "=" in item:
+            k, v = item.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def sandboxes() -> list[dict]:
+    """Managed gbtui Docker containers (running or exited)."""
+    try:
+        r = docker("ps", "-a", "--filter", "label=gbtui.managed=1", "--format", "{{json .}}", timeout=30)
+        if r.returncode != 0:
+            return []
+        out = []
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            labels = _parse_labels(row.get("Labels", ""))
+            name = str(row.get("Names") or "").lstrip("/")
+            out.append({
+                "name": name,
+                "status": str(row.get("Status") or ""),
+                "state": str(row.get("State") or "").lower(),
+                "memory": labels.get("gbtui.memory", ""),
+                "pid": labels.get("gbtui.pid", ""),
+                "id": str(row.get("ID") or ""),
+            })
+        return out
+    except (OSError, subprocess.SubprocessError):
+        return []
 
 
 # ------------------------------------------------------------------------------------------------
@@ -165,12 +178,16 @@ def _alive(pid: int) -> bool:
 
 
 def prune() -> list[str]:
-    """Removes run sandboxes whose owner process is gone (a crash, kill -9, a closed terminal)."""
+    """Removes run containers whose owner process is gone (a crash, kill -9, closed terminal) or that already exited."""
     gone = []
     for s in sandboxes():
         n = s.get("name") or ""
         m = re.match(re.escape(PREFIX) + r"(\d+)-", n)
-        if m and not _alive(int(m.group(1))):
+        if not m:
+            continue
+        owner_dead = not _alive(int(m.group(1)))
+        exited = s.get("state") in ("exited", "dead", "created")
+        if owner_dead or exited:
             destroy(n)
             gone.append(n)
     return gone
@@ -183,52 +200,71 @@ def work_dir() -> Path:
     return d
 
 
+def run_argv(name: str, memory_gb: int, cpus: int, allow: list[str]) -> list[str]:
+    """Hardened `docker run -d` command line for an ephemeral gbench container."""
+    cmd = [
+        "docker", "run", "-d",
+        "--name", name,
+        "--label", "gbtui.managed=1",
+        "--label", f"gbtui.pid={os.getpid()}",
+        "--label", f"gbtui.memory={memory_gb}g",
+        "--memory", f"{memory_gb}g",
+        "--memory-swap", f"{memory_gb}g",
+        "--cpus", str(cpus),
+        "--pids-limit", str(PIDS_LIMIT),
+        "--read-only",
+        "--tmpfs", "/tmp:rw,nosuid,nodev,size=1g",
+        "--cap-drop=ALL",
+        "--security-opt", "no-new-privileges:true",
+    ]
+    if hasattr(os, "getuid") and hasattr(os, "getgid"):
+        cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]
+    cmd += [
+        "-e", "HOME=/tmp",
+        "-e", "TMPDIR=/tmp",
+        "-e", "XDG_CACHE_HOME=/tmp/.cache",
+        "-e", "XDG_CONFIG_HOME=/tmp/.config",
+        # The hardened Docker container itself provides process, filesystem and resource isolation
+        # (bwrap inside Docker would require weakening seccomp / user-namespace restrictions).
+        "-e", "GBENCH_SANDBOX=none",
+        "-v", f"{work_dir()}:{CONTAINER_WORK}:rw",
+        "-w", CONTAINER_WORK,
+    ]
+    if not allow:
+        cmd += ["--network", "none"]
+    else:
+        cmd += ["--add-host", f"{host_alias()}:host-gateway"]
+    cmd += [IMAGE, "sleep", "infinity"]
+    return cmd
+
+
 def create(memory_gb: int, cpus: int, allow: list[str], on_line=None) -> str:
-    """A run sandbox from the template: deny-all network, then only `allow` (host:port patterns). Raises RuntimeError."""
+    """Starts an ephemeral, hardened Docker container from IMAGE. Raises RuntimeError on failure."""
     say = on_line or (lambda _m: None)
     if not template_ready():
-        raise RuntimeError("sandbox template not built yet (Sandbox → Build template)")
+        raise RuntimeError("Docker image not built yet (Sandbox → Build image, or `gbench-tui setup`)")
     prune()
     name = f"{PREFIX}{os.getpid()}-{secrets.token_hex(3)}"
-    say(f"creating sandbox {name} ({memory_gb} GB RAM, {cpus} CPUs, network: sbx default + {len(allow)} hosts)")
-    r = sbx("create", "--no-progress", "--name", name, "--memory", f"{memory_gb}g", "--cpus", str(cpus),
-            "--pull", "never", "-t", TEMPLATE, "shell", str(work_dir()), timeout=600)
+    net_desc = "none (offline)" if not allow else "bridge (endpoint + datasets)"
+    say(f"starting container {name} ({memory_gb} GB RAM, {cpus} CPUs, ro-rootfs, cap-drop=ALL, net: {net_desc})")
+    argv = run_argv(name, memory_gb, cpus, allow)
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=120, env=_env())
     if r.returncode != 0:
         destroy(name)
-        if "not signed in" in _out(r):
-            raise RuntimeError("Docker Sandboxes needs a sign-in: quit and run `sbx login` once")
-        raise RuntimeError(f"could not create sandbox {name}: " + _out(r).strip()[-300:])
-    try:
-        set_network(name, allow)
-    except RuntimeError:
-        destroy(name)
-        raise
+        raise RuntimeError(f"could not start container {name}: " + _out(r).strip()[-300:])
     return name
-
-
-def set_network(name: str, allow: list[str]) -> None:
-    """sbx's network is deny-by-default (global `default-deny-all` plus Docker's allowlist); this adds the hosts the
-    sandbox needs on top. An empty list closes it completely: a sandbox-scoped `deny **` (deny beats every allow)."""
-    if not allow:
-        r = sbx("policy", "deny", "network", "--sandbox", name, "**", timeout=60)
-        if r.returncode != 0 and "already" not in _out(r).lower():
-            raise RuntimeError("could not close the network: " + _out(r).strip()[-200:])
-        return
-    r = sbx("policy", "allow", "network", "--sandbox", name, ",".join(allow), timeout=60)
-    if r.returncode != 0 and "already" not in _out(r).lower():
-        raise RuntimeError("could not allow " + ",".join(allow) + ": " + _out(r).strip()[-200:])
 
 
 def destroy(name: str) -> None:
     try:
-        sbx("rm", "--force", name, timeout=300)
+        docker("rm", "--force", name, timeout=120)
     except (OSError, subprocess.SubprocessError):
         pass
 
 
 def exec_argv(name: str, argv: list[str], env: dict | None = None, user: str | None = None) -> list[str]:
-    """The host command line that runs argv inside the sandbox (for Popen with streamed output)."""
-    cmd = ["sbx", "--no-input", "exec"]
+    """The host command line that runs argv inside the container (for Popen with streamed output)."""
+    cmd = ["docker", "exec"]
     if user:
         cmd += ["-u", user]
     for k, v in (env or {}).items():
@@ -236,21 +272,13 @@ def exec_argv(name: str, argv: list[str], env: dict | None = None, user: str | N
     return cmd + [name, *argv]
 
 
-def upload(name: str, files: dict[str, bytes], dest: str, user: str | None = None) -> None:
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tar:
-        for n, data in files.items():
-            ti = tarfile.TarInfo(n)
-            ti.size, ti.mode = len(data), 0o644
-            tar.addfile(ti, io.BytesIO(data))
-    args = ["exec", "-i"] + (["-u", user] if user else []) + [name, "sh", "-c", f"mkdir -p {dest} && tar -xf - -C {dest}"]
-    r = sbx(*args, input=buf.getvalue(), timeout=300)
-    if r.returncode != 0:
-        raise RuntimeError("upload failed: " + _out(r)[-300:])
+def run_exec(name: str, argv: list[str], env: dict | None = None, timeout: float = 300) -> subprocess.CompletedProcess:
+    """Runs argv inside a running container synchronously and returns the CompletedProcess."""
+    return subprocess.run(exec_argv(name, argv, env=env), capture_output=True, text=True, timeout=timeout, env=_env())
 
 
 def host_alias() -> str:
-    """How a sandbox names the host (where llama-server listens). Detected by setup(); host.docker.internal otherwise."""
+    """How a container names the host (where llama-server listens). `host.docker.internal` on macOS & Linux."""
     try:
         return json.loads((config_dir() / "sandbox.json").read_text()).get("host_alias") or "host.docker.internal"
     except (OSError, ValueError):
@@ -258,12 +286,12 @@ def host_alias() -> str:
 
 
 def sandbox_url(base_url: str) -> str:
-    """The endpoint URL as seen from inside the sandbox: localhost becomes the host alias."""
+    """The endpoint URL as seen from inside the container: localhost becomes the host alias."""
     return re.sub(r"//(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])(?=[:/]|$)", "//" + host_alias(), base_url.strip())
 
 
 def allow_for(base_url: str) -> list[str]:
-    """Network allow rules for a run against base_url (plus the dataset hosts)."""
+    """Hosts needed by a run against base_url (endpoint + dataset hosts)."""
     surl = sandbox_url(base_url)
     p = urllib.parse.urlparse(surl if "://" in surl else "http://" + surl)
     host = p.hostname or ""
@@ -284,10 +312,10 @@ def allow_for(base_url: str) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------------
-# template build
+# image build
 # ------------------------------------------------------------------------------------------------
 def gbench_source(on_line=print) -> Path | None:
-    """A pinned checkout of gbench on the host (shallow clone; reused). The template installs from it."""
+    """A pinned checkout of gbench on the host (shallow clone; reused). The Docker image installs from it."""
     src = cache_dir() / "gbench-src"
     if (src / "pyproject.toml").is_file():
         return src
@@ -320,6 +348,38 @@ def _tar_source(src: Path) -> bytes:
                 continue
             tar.add(p, arcname=str(rel))
     return buf.getvalue()
+
+
+def dockerfile() -> str:
+    """Dockerfile that builds IMAGE: Python 3.12 + gbench[evals] + tokenizers + NLTK punkt, ready for --read-only."""
+    extra_pkgs = " ".join(shlex.quote(p) for p in EXTRA_PIP)
+    skip_json = json.dumps(SKIP_EXTRAS_ARM64)
+    return f"""FROM {BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive \\
+    UV_NO_CACHE=1 \\
+    NLTK_DATA=/opt/nltk_data \\
+    PATH="{VENV}/bin:${{PATH}}"
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git \\
+    && rm -rf /var/lib/apt/lists/*
+COPY gbench-src.tgz /tmp/gbench-src.tgz
+RUN mkdir -p /opt/gbench-src /opt/nltk_data {CONTAINER_WORK} \\
+    && tar -xzf /tmp/gbench-src.tgz -C /opt/gbench-src \\
+    && rm -f /tmp/gbench-src.tgz \\
+    && python3 -m venv /tmp/uvenv \\
+    && /tmp/uvenv/bin/pip install --no-cache-dir -q uv \\
+    && /tmp/uvenv/bin/uv venv -q --python python3 {VENV} \\
+    && {VENV}/bin/python -c 'import platform, re, tomllib; skip = {skip_json} if platform.machine().lower() in ("aarch64", "arm64") else []; reqs = tomllib.load(open("/opt/gbench-src/pyproject.toml", "rb"))["project"]["optional-dependencies"]["evals"]; open("/tmp/extras.txt", "w").write("\\n".join(r for r in reqs if re.split(r"[<>=!~\\[; ]", r, maxsplit=1)[0].lower() not in skip) + "\\n")' \\
+    && /tmp/uvenv/bin/uv pip install -q --python {VENV}/bin/python /opt/gbench-src -r /tmp/extras.txt {extra_pkgs} \\
+    && rm -rf /tmp/uvenv /tmp/extras.txt \\
+    && {VENV}/bin/python -m nltk.downloader -q -d /opt/nltk_data punkt punkt_tab \\
+    && test -d /opt/nltk_data/tokenizers/punkt_tab \\
+    && ln -sf {VENV}/bin/gbench /usr/local/bin/gbench \\
+    && chmod -R a+rX {VENV} /opt/gbench-src /opt/nltk_data \\
+    && chmod 1777 {CONTAINER_WORK} \\
+    && echo {VERSION} > {MARKER} \\
+    && {VENV}/bin/gbench --version
+WORKDIR {CONTAINER_WORK}
+"""
 
 
 CATALOG_PY = r'''
@@ -359,117 +419,82 @@ print(json.dumps({"gbench_version": getattr(gbench, "__version__", ""), "pillars
 
 
 def setup(on_line=print, cpus: int = 4) -> bool:
-    """Builds the template (idempotent). Returns True when the template is ready."""
+    """Builds the Docker image (idempotent). Returns True when the image is ready."""
     if not installed():
-        on_line("✗ Docker Sandboxes (sbx) is not installed: brew install docker/tap/sbx")
+        on_line("✗ Docker is not installed (install Docker Desktop, OrbStack, Colima, or Docker Engine)")
         return False
     st = status()
-    if st and "template" not in st:
+    if st and "image" not in st.lower():
         on_line("✗ " + st)
         return False
     if template_ready():
-        on_line(f"✔ template {TEMPLATE} ready")
+        on_line(f"✔ Docker image {IMAGE} ready")
         if not (config_dir() / "catalog.json").is_file():
             refresh_catalog(on_line)
         return True
     src = gbench_source(on_line)
     if not src:
         return False
-    if any(s.get("name") == BUILDER for s in sandboxes()):
-        destroy(BUILDER)
-    on_line(f"creating the builder sandbox {BUILDER} ({BUILD_MEMORY} RAM, {cpus} CPUs, no host files)…")
-    r = sbx("create", "--no-progress", "--name", BUILDER, "--memory", BUILD_MEMORY, "--cpus", str(cpus), "shell",
-            timeout=900)
-    if r.returncode != 0:
-        on_line("✗ " + _out(r).strip()[-400:])
-        return False
     ok = False
-    try:
-        set_network(BUILDER, BUILD_HOSTS)
-        on_line("uploading gbench " + (gbench_commit() or GBENCH_REF) + "…")
-        upload(BUILDER, {"gbench-src.tgz": _tar_source(src)}, "/tmp/gbtui", user="root")
-        script = f"""
-set -e
-mkdir -p /opt/gbench-src && tar -xzf /tmp/gbtui/gbench-src.tgz -C /opt/gbench-src && rm -rf /tmp/gbtui
-export HOME=/root UV_PYTHON_INSTALL_DIR=/opt/python UV_NO_CACHE=1
-# gbench's eval extras pin wheels that only exist up to CPython 3.13: use uv and a standalone CPython {PYTHON}
-python3 -m venv /tmp/uvenv && /tmp/uvenv/bin/pip install -q uv
-/tmp/uvenv/bin/uv venv -q --python {PYTHON} {VENV}
-echo "python: $({VENV}/bin/python --version)"
-echo "installing gbench[evals] (a few minutes)…"
-{VENV}/bin/python - > /tmp/extras.txt <<'PYEOF'
-import re, tomllib
-skip = {SKIP_EXTRAS!r}
-for req in tomllib.load(open("/opt/gbench-src/pyproject.toml", "rb"))["project"]["optional-dependencies"]["evals"]:
-    if re.split(r"[<>=!~\[; ]", req, maxsplit=1)[0].lower() not in skip:
-        print(req)
-PYEOF
-/tmp/uvenv/bin/uv pip install -q --python {VENV}/bin/python /opt/gbench-src -r /tmp/extras.txt {' '.join(shlex.quote(p) for p in EXTRA_PIP)}
-rm -rf /tmp/uvenv
-# ifeval & co. need nltk's punkt; nltk refuses proxied downloads unless told the proxy (sbx's) is trusted
-NLTK_ALLOW_PROXIED_URLOPEN=1 {VENV}/bin/python -m nltk.downloader -q -d /opt/nltk_data punkt punkt_tab
-test -d /opt/nltk_data/tokenizers/punkt_tab
-ln -sf {VENV}/bin/gbench /usr/local/bin/gbench
-echo {VERSION} > {MARKER}
-{VENV}/bin/gbench --version
-"""
-        on_line("installing gbench and its eval extras inside the sandbox (PyPI only)…")
-        p = subprocess.Popen(exec_argv(BUILDER, ["sh", "-c", script], user="root"), stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, text=True, env=_env())
-        log_path = config_dir() / "logs" / "setup.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        tail: list[str] = []
-        with log_path.open("w") as log:
-            for line in p.stdout:
-                log.write(line)
-                line = line.rstrip()
-                tail = (tail + [line])[-12:]
-                if line and not line.startswith(" ") and "WARNING" not in line and "cache has been disabled" not in line:
-                    on_line("  " + line[-200:])
-        if p.wait() != 0:
-            for line in tail:
-                on_line("  │ " + line[-200:])
-            on_line(f"✗ installation failed (full log: {log_path})")
+    log_path = config_dir() / "logs" / "setup.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="gbtui-build-") as tmp:
+        ctx = Path(tmp)
+        (ctx / "Dockerfile").write_text(dockerfile(), encoding="utf-8")
+        on_line(f"packaging gbench {gbench_commit() or GBENCH_REF}…")
+        (ctx / "gbench-src.tgz").write_bytes(_tar_source(src))
+        on_line(f"building Docker image {IMAGE} from {BASE_IMAGE} (a few minutes)…")
+        cmd = ["docker", "build", "--progress=plain", "-t", IMAGE, str(ctx)]
+        try:
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=_env())
+            tail: list[str] = []
+            with log_path.open("w", encoding="utf-8") as log:
+                assert p.stdout is not None
+                for line in p.stdout:
+                    log.write(line)
+                    line = line.rstrip()
+                    tail = (tail + [line])[-12:]
+                    if line and not line.startswith(" ") and "WARNING" not in line and "cache has been disabled" not in line:
+                        on_line("  " + line[-200:])
+            if p.wait() != 0:
+                for line in tail:
+                    on_line("  │ " + line[-200:])
+                on_line(f"✗ docker build failed (full log: {log_path})")
+                return False
+            ok = template_ready()
+            if not ok:
+                on_line(f"✗ Docker image {IMAGE} not found after build")
+                return False
+        except (OSError, subprocess.SubprocessError) as e:
+            on_line(f"✗ {e}")
             return False
-        set_network(BUILDER, [])
-        on_line(f"saving the sandbox as the template {TEMPLATE}…")
-        sbx("stop", BUILDER, timeout=300)
-        r = sbx("template", "save", BUILDER, TEMPLATE, timeout=3600)
-        if r.returncode != 0 or not template_ready():
-            on_line("✗ could not save the template: " + _out(r).strip()[-300:])
-            return False
-        ok = True
-    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
-        on_line(f"✗ {e}")
-    finally:
-        destroy(BUILDER)
     if ok:
-        for old in templates():                   # older gbtui-gbench:vN templates: disk only
-            repo = TEMPLATE.rsplit(":", 1)[0]
+        repo = IMAGE.rsplit(":", 1)[0]
+        for old in templates():                   # clean up older gbtui-gbench:v* images
             old_repo = old.rsplit(":", 1)[0]
-            if (old_repo == repo or old_repo.endswith("/" + repo)) and not _same(old, TEMPLATE):
-                sbx("template", "rm", old, timeout=300)
-                on_line(f"removed the old template {old}")
+            if (old_repo == repo or old_repo.endswith("/" + repo)) and not _same(old, IMAGE):
+                docker("rmi", old, timeout=120)
+                on_line(f"removed old image {old}")
         refresh_catalog(on_line)
-        on_line(f"✔ template {TEMPLATE} ready: each run gets a fresh sandbox from it, removed when the run ends")
+        on_line(f"✔ Docker image {IMAGE} ready: each run gets a fresh hardened container, removed when it ends")
     return ok
 
 
 def refresh_catalog(on_line=print) -> bool:
-    """Asks gbench (inside a short-lived sandbox) for its suites, pillars and Golden Set; caches it as JSON."""
+    """Asks gbench (inside an offline container) for its suites, pillars and Golden Set; caches it as JSON."""
     try:
         name = create(2, 2, [], on_line)
     except RuntimeError as e:
         on_line(f"✗ {e}")
         return False
     try:
-        r = sbx("exec", name, f"{VENV}/bin/python", "-c", CATALOG_PY, timeout=300)
+        r = run_exec(name, [f"{VENV}/bin/python", "-c", CATALOG_PY], timeout=300)
         if r.returncode != 0:
             on_line("✗ catalog: " + _out(r).strip()[-300:])
             return False
         data = json.loads(r.stdout.strip().splitlines()[-1])
         data["gbench_commit"] = gbench_commit()
-        (config_dir() / "catalog.json").write_text(json.dumps(data, indent=1))
+        (config_dir() / "catalog.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
         on_line(f"✔ catalog: {len(data['suites'])} eval suites in {len(data['pillars'])} pillars, "
                 f"{len(data['golden'])} Golden Set tasks")
         return True

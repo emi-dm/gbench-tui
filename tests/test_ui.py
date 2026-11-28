@@ -291,19 +291,126 @@ class TestUIPrimitives(unittest.TestCase):
                     self.assertIn("Environment", home_txt)
                     self.assertIn("Metrics", home_txt)
                     self.assertIn("Settings", home_txt)
-                # Also verify Endpoints, Run, Leaderboard, Sandbox, Settings open & close cleanly
+                # Also verify Endpoints, Run, Leaderboard, Harness Lens, Sandbox, Settings open & close cleanly
                 scr.keys = ["q"]
                 app.screen_endpoints()
                 scr.keys = ["q"]
                 app.screen_run()
-                scr.keys = ["q"]
+                scr.keys = ["H", "q"]
                 app.screen_leaderboard()
+                scr.keys = ["p", "q", "c", "p", "q", "j", "l", "q"]
+                app.screen_harness_lens()
                 scr.keys = ["q"]
                 app.screen_sandbox()
                 scr.keys = ["q"]
                 app.screen_settings()
                 scr.keys = ["j", "c", "\t", "j", "l", "l", "\n", "q", "b", "q", "q"]
                 app.screen_metrics()
+                # Verify fast quit wakes Status poller cleanly
+                self.assertTrue(app.quit())
+                st.stop.assert_called_once()
+
+    def test_ten_themes_and_ordered_home_menu(self):
+        self.assertGreaterEqual(len(T.THEME_ORDER), 16)
+        keys = [m[0] for m in tui.App.MENU]
+        # Digits 1..9, 0 are strictly ordered with no letters interleaved
+        self.assertEqual(keys[:10], ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"])
+        self.assertEqual(keys[10:], ["d", "s"])
+        # Every menu number across all 17 themes has readable luminance (never washed-out white or dim dark)
+        for name in T.THEME_ORDER:
+            T.set_theme(name)
+            for idx in range(len(tui.App.MENU)):
+                mc = T.menu_color(idx)
+                lum = T.xterm_luminance(mc)
+                self.assertGreaterEqual(lum, 0.12, f"{name} menu[{idx}]={mc} too dark ({lum:.2f})")
+                self.assertLessEqual(lum, 0.86, f"{name} menu[{idx}]={mc} too bright ({lum:.2f})")
+            # Solid pill foreground adapts to background luminance
+            self.assertEqual(T.contrast_fg(T.YELLOW), T.INK if T.xterm_luminance(T.YELLOW) >= 0.34 else T.LIGHT)
+        T.set_theme("aurora")
+
+    def test_live_theme_preview_choose_and_modular_setup(self):
+        # 1. `choose(..., on_move=..., on_redraw=...)` previews live and restores on Esc
+        T.set_theme("aurora")
+        seen = []
+        scr = FakeScreen(24, 80, keys=[curses.KEY_DOWN, curses.KEY_DOWN, U.ESC])
+        with _CursesEnv():
+            u = U.UI(scr)
+            items = [(k, T.THEMES[k]["label"], T.THEMES[k]["desc"]) for k in T.THEME_ORDER]
+            res = u.choose("Themes", items, sel=0, on_move=lambda v: (T.set_theme(v), seen.append(v)))
+        self.assertIsNone(res)
+        self.assertEqual(seen, ["aurora", "antigravity", "cyber"])
+        # Cycling through all 17 themes resets curses pair table so pair IDs never exceed 254 (no A_STANDOUT overflow)
+        with _CursesEnv(colors=256, pairs=32767):
+            u2 = U.UI(FakeScreen(24, 80))
+            for name in T.THEME_ORDER:
+                T.set_theme(name)
+                for c in (T.CYAN, T.GREEN, T.PINK, T.YELLOW, T.VIOLET, T.LIGHT):
+                    u2.color(c, T.BAR)
+                    u2.color(c, T.SEL)
+                self.assertLess(len(u2._pairs), 255)
+        T.set_theme("aurora")
+
+        # 2. Modular setup check CLI
+        with mock.patch("builtins.print") as p:
+            self.assertEqual(cli.main(["setup", "--check"]), 0)
+            self.assertTrue(any("gbench_docker" in str(call) and "harbor" in str(call) for call in p.call_args_list))
+
+    def test_cli_lens_and_report_commands(self):
+        with mock.patch("builtins.print") as p:
+            self.assertEqual(cli.main(["lens", "hermes"]), 0)
+            self.assertTrue(any("Hermes" in str(call) for call in p.call_args_list))
+        with mock.patch("builtins.print") as p:
+            self.assertEqual(cli.main(["lens", "hermes", "--prompt"]), 0)
+            self.assertTrue(any("<code_mode_policy>" in str(call) for call in p.call_args_list))
+        with mock.patch("builtins.print") as p:
+            self.assertEqual(cli.main(["lens", "--compare", "pi", "hermes"]), 0)
+            self.assertTrue(any("Pi" in str(call) and "Hermes" in str(call) for call in p.call_args_list))
+
+    def test_compare_and_results_screens_render_cleanly(self):
+        import json
+        root = Path(tempfile.mkdtemp())
+
+        def make_run(rid, quant, ok2):
+            d = root / rid
+            d.mkdir(parents=True)
+            samples = [
+                {"sample_key": "s1", "messages": [{"role": "user", "content": "2+2?"}], "response_text": "4", "is_correct": True, "completion_tokens": 18, "finish_reason": "stop"},
+                {"sample_key": "s2", "messages": [{"role": "user", "content": "3+3?"}], "response_text": "6" if ok2 else "truncated…", "is_correct": ok2, "completion_tokens": 24 if ok2 else 4096, "finish_reason": "stop" if ok2 else "length"},
+            ]
+            (d / "summary.json").write_text(json.dumps({
+                "models": [{"benchmark_type": "eval", "eval_name": "gsm8k", "accuracy": 100.0 if ok2 else 50.0,
+                            "total_questions": 2, "correct_answers": 2 if ok2 else 1, "status": "completed",
+                            "sample_traces_omitted": {"file": "gsm8k.json"}}],
+                "failures": [],
+            }))
+            (d / "gsm8k.json").write_text(json.dumps({"sample_traces": samples}))
+            (d / "gbtui.json").write_text(json.dumps({
+                "run_id": rid, "status": "ok", "started": 6000.0 + len(rid), "finished": 6020.0,
+                "spec": {"tier": "evals", "endpoint": {"name": f"m-{quant}", "model": f"m-{quant}", "quant": quant}},
+            }))
+            return R.load_run(d)
+
+        ra = make_run("20261128-100001-a", "Q8_0", True)
+        rb = make_run("20261128-100002-b", "Q4_K_M", False)
+        for h, w in ((24, 80), (18, 60)):
+            scr = FakeScreen(h, w, keys=["\n", "q", "f", "q"])
+            with _CursesEnv(), mock.patch.object(tui, "Status") as st_cls:
+                st = mock.MagicMock()
+                st.mem_avail = 32 * 1024 ** 3
+                st.mem_total = 64 * 1024 ** 3
+                st.swap = 0
+                st.mem_hist = [0.5]
+                st.ep_ok = {}
+                st.sbx = "ready"
+                st.sbx_list = []
+                st_cls.return_value = st
+                app = tui.App(scr)
+                app.s.results_dir = str(root)
+                app.screen_compare(ra, rb)
+                scr.keys = ["q"]
+                app.run_detail(rb)
+                scr.keys = ["q"]
+                app.screen_results()
 
     def test_metrics_screen_split_and_cli(self):
         self.assertGreaterEqual(len(metrics.METRICS), 10)

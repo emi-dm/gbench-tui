@@ -1,13 +1,13 @@
 [project]
 name = "gbench-tui"
 version = "0.1.0"
-description = "A terminal UI for Google DeepMind's gbench: endpoints, runs in Docker Sandboxes, results, dataset export and a leaderboard"
+description = "A terminal UI for Google DeepMind's gbench: endpoints, hardened Docker runs, results, dataset export and a leaderboard"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "emi-dm" }]
-keywords = ["llm", "benchmark", "evaluation", "gbench", "tui", "leaderboard", "docker sandboxes", "llama.cpp"]
+keywords = ["llm", "benchmark", "evaluation", "gbench", "tui", "leaderboard", "docker", "llama.cpp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console :: Curses",
@@ -19,13 +19,15 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 # No runtime dependencies on the host: the TUI is curses + the standard library. gbench and its eval extras live in
-# the Docker Sandbox template (see src/gbtui/sandbox.py).
+# the Docker image (see src/gbtui/sandbox.py).
 dependencies = []
 
 [project.optional-dependencies]
-parquet = ["pyarrow"]   # Parquet export on the host (otherwise converted inside a sandbox)
+parquet = ["pyarrow"]   # Parquet export on the host (otherwise converted inside an offline Docker container)
 
 [project.scripts]
+gbt = "gbtui.cli:main"
+gbtui = "gbtui.cli:main"
 gbench-tui = "gbtui.cli:main"
 
 [build-system]

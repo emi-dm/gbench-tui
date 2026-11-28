@@ -1,6 +1,6 @@
 """What gbench can run: eval suites by pillar, the Golden Set, and each suite's own documentation.
 
-Two sources, both gbench's own: the catalog dumped by gbench inside the sandbox when the template is built
+Two sources, both gbench's own: the catalog dumped by gbench inside the Docker container when the image is built
 (~/.config/gbench-tui/catalog.json: suites, pillars, [tools] flag, Golden Set tasks) and the docs of the pinned
 checkout (docs/eval-suites.md table for titles and descriptions, docs/evals/<suite>.md for the full card).
 """
@@ -80,12 +80,12 @@ def load() -> dict:
     table = _table()
     try:
         data = json.loads((config_dir() / "catalog.json").read_text())
-        source = "gbench (inside the sandbox)"
+        source = "gbench (inside Docker container)"
     except (OSError, ValueError):
         data = {"suites": [{"name": k, "pillar": v["pillar"], "tools": False, "named_only": False}
                            for k, v in table.items()],
                 "pillars": list(dict.fromkeys(v["pillar"] for v in table.values())), "golden": _golden_from_src()}
-        source = "gbench docs (build the sandbox template for gbench's own list)"
+        source = "gbench docs (build the Docker image for gbench's own list)"
     if not isinstance(data, dict):
         data = {}
     data.setdefault("suites", [])

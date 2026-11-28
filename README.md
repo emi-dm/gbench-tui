@@ -1,224 +1,275 @@
 <p align="center">
-  <b>A terminal UI for Google DeepMind's <a href="https://github.com/google-deepmind/gbench">gbench</a>:</b>
-  pick your endpoints and quantizations, run gbench inside Docker Sandboxes, inspect metrics and per-sample verdicts, export datasets and explore an interactive leaderboard.
+  <b>A terminal UI for Google DeepMind's <a href="https://github.com/google-deepmind/gbench">gbench</a> &amp; <a href="https://github.com/laude-institute/harbor">Harbor</a> agentic harnesses:</b><br>
+  pick endpoints, quantizations &amp; GGUF LoRAs, run hardened Docker evaluations &amp; overnight sweeps, dissect agent harnesses, distill LoRA training datasets and explore an interactive Pareto leaderboard.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/backend-gbench-4F7CFF" alt="backend: gbench">
-  <img src="https://img.shields.io/badge/sandbox-Docker%20Sandboxes-7C5CFF" alt="sandbox: Docker Sandboxes">
+  <img src="https://img.shields.io/badge/CLI-gbt%20%7C%20gbtui%20%7C%20gbench--tui-00E5FF" alt="CLI aliases">
+  <img src="https://img.shields.io/badge/backend-gbench%20%2B%20Harbor-4F7CFF" alt="backend: gbench + Harbor">
+  <img src="https://img.shields.io/badge/sandbox-Docker%20(hardened)-7C5CFF" alt="sandbox: hardened Docker">
+  <img src="https://img.shields.io/badge/distill-Unsloth%20%2B%20HF%20TRL-2EE6A6" alt="distillation: Unsloth + HF TRL">
   <img src="https://img.shields.io/badge/host%20deps-none%20(stdlib%20curses)-F472B6" alt="no host dependencies">
   <img src="https://img.shields.io/badge/license-Apache--2.0-34D399" alt="Apache-2.0">
 </p>
 
 <p align="center">
-  <img src="assets/demo-aurora.gif" alt="gbench-tui demo" width="900"><br>
-  <sub>Home (Gemini Aurora) → Endpoints & quantizations → Run config → Suites → Metrics & Formulas → Samples → Leaderboard → live theme switcher.</sub>
+  <img src="assets/demo-aurora.gif" alt="gbench-tui (gbt) live demo" width="900"><br>
+  <sub><code>gbt</code> demo: Home → live 17-theme preview (<code>T</code>) → Endpoints &amp; LoRAs → Run &amp; Preflight → Harness Lens &amp; System Prompts → Results &amp; Code Mode telemetry → Leaderboard &amp; Adapter × Harness Matrix → Modular Setup &amp; Sandbox.</sub>
 </p>
 
-**gbench-tui** puts a friendly face on [gbench](https://github.com/google-deepmind/gbench), Google DeepMind's open
-benchmarking suite for open models. gbench does all the measuring (its Golden Set, its ~90 academic eval suites, its
-serving benchmarks, its scoring and result files); gbench-tui chooses the flags, runs gbench **always inside a Docker
-Sandbox**, keeps an eye on your machine's memory and turns the results into something you can inspect, rank and share.
+**gbench-tui** (invoked cleanly as **`gbt`**, `gbtui`, or `gbench-tui`) puts a fast, zero-dependency terminal interface on [gbench](https://github.com/google-deepmind/gbench) and [Harbor](https://github.com/laude-institute/harbor). gbench and Harbor perform all measurements (Golden Set, ~90 academic eval suites, serving throughput/TTFT, real containerized coding-agent trajectories); `gbt` manages local `llama-server` + GGUF LoRAs, enforces **ephemeral hardened Docker isolation** and host RAM guards, diagnoses failures and tool-call economy, exports **Unsloth / HF TRL LoRA distillation datasets**, and renders interactive leaderboards and reports.
 
-- **Endpoints & Quantization**: any OpenAI-compatible `/v1` server (llama.cpp, vLLM, Ollama, LM Studio, a hosted API),
-  or local **GGUF** files served with `llama-server` on demand. Quantizations (`Q4_K_M`, `Q6_K`, `Q8_0`, `BF16`, `FP8`,
-  `AWQ`, …) are auto-detected and tracked as a first-class dimension so variants like `LFM3-1.7B_Q4_K_M` and
-  `LFM3-1.7B_Q8_0` are evaluated and compared side by side without overwriting each other.
-- **Run** gbench's three things that make sense on a workstation: the **Golden Set** (16 deterministic capability
-  checks), **academic eval suites** (pick from ~90 by pillar; ★ marks the ones that need nothing but an endpoint) and
-  **performance on this device** (`--personal`: decode tok/s, time to first token). A **preflight** checks a suite's
-  prerequisites without sending a request.
-- **Live view**: pipeline stages, progress bar with ETA, the current suite and syntax-highlighted streamed logs while a
-  run executes in the background.
-- **Metrics & Formulas**: built-in interactive reference (`m`) showing the exact formula, source and worked example for
-  every metric (`gScore`, `golden_set`, `decode tok/s`, `TTFT`, quantization `bpw` / compactness, host RAM guard), plus
-  a **By Benchmark** tab covering the official scoring metric, sub-metrics and protocol of every `gbench` suite.
-- **Results**: every run with its scores, stacked pass/fail bar, per-sample explorer (prompt, reasoning, response, tool
-  calls, expected answer, why it failed) and gbench's own log.
-- **Leaderboard (TUI + interactive Web)**: latest scores per `(model, quant)` variant ranked by `gScore`, written after
-  every run as `leaderboard.md`, `leaderboard.json` and a 100% offline `leaderboard.html` featuring **Radar** and
-  **Polar Area** circular dimension charts, **Grouped / By Quant / gScore / Speed** bar charts, model & quantization
-  filters and a sortable score matrix.
-- **Export as a dataset**: samples and scores (with `base_model` and `quant` columns) as JSONL and/or Parquet with a
-  Hugging Face dataset card, ready for `huggingface-cli upload`.
-- **5 live colour themes**: `Gemini Aurora` (default), `Cyber Neon`, `Solar Ember`, `Nordic Emerald` and `DeepMind
-  Classic`, switchable live with `t` on Home, in Settings, and inside `leaderboard.html`.
+- **Modular Zero-Hassle Setup (`gbt setup --profile llm|agents|full`)**: zero third-party Python dependencies on the host (pure stdlib + `curses`). Pick what you need — `llm` (hardened gbench Docker image + catalog), `agents` (Harbor + coding harnesses: Pi, OpenCode, Hermes, Aider), or `full`. You only bring Docker (and `llama.cpp` for local GGUFs).
+- **Endpoints, Binary GGUF Reader, Auto-Discovery & In-TUI LoRA Picker**: connect any OpenAI-compatible `/v1` server, auto-discover running local servers (`D` / `gbt discover` — Ollama `:11434`, LM Studio `:1234`, `llama-server :8080`, vLLM `:8000`), or bulk-import GGUF folders (`F` / `gbt import-gguf`) via pure-stdlib **binary GGUF v2/v3 header parsing** (architecture, parameter count, native context length, exact quantization, LoRA detection). Select, swap, scale (`--lora-scaled`), or download GGUF LoRAs right inside the TUI (`l` LoRA picker / `h` [`harness-hub`](https://huggingface.co/harness-hub/collections)).
+- **Presets, Duration Estimates, Overnight Quant Sweeps & Harbor Harnesses**: run reusable evaluation **Presets** (`smoke`, `core`, `coding`, `quant-shootout`, `harness-smoke`) with pre-launch RAM and **duration estimates**, queue overnight **Quantization Sweeps** (`3` / `gbt sweep` auto-cycling `llama-server` across quants), and evaluate real agentic **Harbor** harnesses (`--tier harness`: **Pi**, **OpenCode**, **Hermes**, Claude Code, OpenHands, Aider) — including **Adapter × Harness Matrix** and **Code Mode vs Normal** tool-call A/B tracking (`avg_code_mode_calls`, `avg_normal_tool_calls`, KV cache hit %, steps, tool error rate).
+- **Harness Lens, Full System Prompts & Interactive Play (`7` / `gbt lens` / `gbt play`)**: inspired by [`harness-hub/harness-lens`](https://huggingface.co/spaces/harness-hub/harness-lens), inspect and compare 6 agent harnesses side-by-side (prompt anatomy, tool surface, edit strategy, Code Mode, compaction), read full live-captured or reference **system prompts** with XML highlighting (`p` / `gbt lens hermes --prompt`), and launch an interactive **Play** session (`L` / `gbt play --harness hermes`) against any endpoint + LoRA.
+- **Deep Diagnostics, Compare A vs B & History Management**: automatic **Failure Taxonomy** (`truncated`, `tool_format`, `timeout_error`, `wrong_answer`), **Token Economy** (`avg pass/fail tokens`, `gScore / 1k tok`), split-view **Compare A vs B** sample diff (`d` / `gbt compare` for regressions `Pass → Fail` & improvements `Fail → Pass`), plus notes/tags (`n`), archive (`a`/`A`), cleanup (`C`), and native desktop/bell notifications on completion.
+- **Standardized Knowledge Distillation & LoRA SFT Export (`0` / `gbt distill`)**: export verified traces — including **full multi-turn Harbor ATIF trajectories** with tool calls & outputs — in **ChatML `messages`** (native **Unsloth Studio / Desktop** & **Hugging Face TRL `SFTTrainer`**) or **ShareGPT `conversations`**, with rejection sampling (`--filter passed`), reasoning controls (`think_tags`, `reasoning_content`, `strip`), JSONL + Parquet, and ready-to-run Unsloth/TRL dataset cards.
+- **Interactive Offline Leaderboard (Pareto Frontier + Matrix) & Reports**: ranks `(base_model, quant, adapter, harness)` variants in `leaderboard.md`, `leaderboard.json`, and a self-contained offline `leaderboard.html` with **Adapter × Harness Heatmap Matrix**, **Radar / Polar Area**, grouped bar charts, and **Pareto Frontier** scatter plots (`gScore vs decode tok/s`, `vs Size GB/bpw`, `vs gScore/1k tok`), plus `gbt report` (`R`) for GitHub/Reddit/HF model cards.
+- **17 WCAG-Contrast Colour Themes with Live Preview (`T`)**: `Gemini Aurora`, **`Antigravity Orbital`** *(signature theme)*, `Cyber Neon`, `Solar Ember`, `Nordic Emerald`, `DeepMind Classic`, `Tokyo Night`, `Catppuccin Mocha`, `Dracula Prism`, `Gruvbox Forge`, `Monokai Pro`, `Nord Frost`, `Rosé Pine`, `Kanagawa Wave`, `Solarized Dark`, `One Dark Pro`, and `Synthwave '84` — live-previewed as you scroll (`T`), synced with `leaderboard.html`, and protected by luminance contrast guards so menu numbers and badges always stay readable.
 
 ```text
-  host (macOS / Linux)                               Docker Sandbox  gbtui-run-<pid>-<hex>   (microVM, RAM/CPU cap)
- ┌──────────────────────────────┐   sbx exec   ┌──────────────────────────────────────────────────────────────┐
- │ gbench-tui  (curses, stdlib) │ ───────────▶ │ gbench --remote-endpoint http://host:8080/v1 --golden-only … │
- │  endpoints · runs · metrics  │              │   /opt/gbench   gbench + its eval extras (template)          │
- │  results · leaderboard       │ ◀─────────── │   workspace     ← same host path: HF cache + run's results    │
- └──────────────┬───────────────┘   results    │   network       sbx deny-by-default + endpoint + Hugging Face │
-                │                              └──────────────────────────────────┬───────────────────────────┘
-                ▼  starts on demand                                                │ only allowed host port
-        llama-server (Metal/CUDA) ◀────────────────────────────────────────────────┘
-        or any OpenAI-compatible /v1 server
+  host (macOS / Linux)                             Hardened Docker containers (RAM / CPU / PID capped)
+ ┌──────────────────────────────┐  docker exec  ┌──────────────────────────────────────────────────────────────┐
+ │ gbt  (stdlib curses TUI/CLI) │ ────────────▶ │ gbench --remote-endpoint http://host.docker.internal:8080/v1 │
+ │  endpoints · LoRAs · sweeps  │               │   /opt/gbench   gbench + eval extras (gbtui-gbench:v3)       │
+ │  Harness Lens · diagnostics  │ ◀──────────── │   /work         ← ~/.cache/gbench-tui/work (HF cache + runs) │
+ │  distill · Pareto leaderboard│    results    │   hardened      --read-only · --cap-drop=ALL · non-root      │
+ └──────────────┬───────────────┘               └──────────────────────────────────┬───────────────────────────┘
+                │  + Harbor agentic trials (Pi / OpenCode / Hermes / …)            │ host-gateway
+                ▼  auto-starts on demand                                           │
+        llama-server (Metal/CUDA) + --lora-scaled ◀────────────────────────────────┘
+        or Ollama / LM Studio / vLLM / any OpenAI-compatible /v1 server
 ```
 
-**Contents** · [Quick start](#quick-start) · [The TUI](#the-tui) · [Screenshots](#screenshots) · [What it runs](#what-it-runs) ·
-[Sandboxes and memory](#docker-sandboxes-and-memory) · [Results, leaderboard and export](#results-leaderboard-and-export) ·
-[Command line](#command-line) · [Example results](#example-lfm3-17b-on-a-macbook) · [Notes](#notes)
+**Contents** · [Quick start & Modular Setup](#quick-start--modular-setup) · [The TUI](#the-tui) · [Screenshots](#screenshots) · [What it runs](#what-it-runs) · [Docker isolation and memory](#docker-isolation-and-memory) · [Knowledge Distillation & Export](#knowledge-distillation--export) · [Command line](#command-line) · [Example: LFM3-1.7B on a MacBook](#example-lfm3-17b-on-a-macbook) · [Architecture](#architecture) · [Notes](#notes)
 
-## Quick start
+---
 
-You need **Python 3.10+**, **[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/get-started/)** (`sbx`, signed in
-once with `sbx login`) and, to serve GGUF files, **[llama.cpp](https://github.com/ggml-org/llama.cpp)**
-(`brew install llama.cpp`). Nothing else is installed on the host: gbench and its dependencies live in the sandbox
-template.
+## Quick start & Modular Setup
+
+You only need **Python 3.10+**, **Docker** (Docker Desktop, OrbStack, Colima or Linux Docker Engine — no sign-in required) and, to serve local GGUF files, **[llama.cpp](https://github.com/ggml-org/llama.cpp)** (`brew install llama.cpp`). Everything else is installed modularly by `gbt setup`:
 
 ```bash
 git clone https://github.com/emi-dm/gbench-tui && cd gbench-tui
-uv tool install --editable .        # or: pip install -e .
-gbench-tui setup                    # builds the sandbox template: gbench + its eval extras (once, a few minutes)
-gbench-tui                          # the TUI
+uv tool install --editable .             # installs `gbt` (short alias), `gbtui` and `gbench-tui`
+
+# Pick the setup profile that matches your workflow:
+gbt setup --profile llm                  # LLM benchmarks only: hardened gbench Docker image + suite catalog
+gbt setup --profile agents               # Agentic evals: Harbor + Pi, OpenCode, Hermes & Aider harnesses
+gbt setup --profile full                 # Everything (LLM Docker sandbox + Harbor + agent harnesses)
+gbt setup --check                        # Audit installed components (Docker, image, Harbor, harnesses, llama.cpp)
+
+gbt                                      # Launch the TUI (or press d → i inside the TUI for modular setup)
 ```
 
-In the TUI: **1** add or pick an endpoint (or `.gguf` quant) → **2** run → **3** follow it → **5** results → **6** leaderboard (`m` anytime for metrics & formulas, `t` on Home to cycle themes).
+Inside the TUI: **`1`** add/discover endpoints & LoRAs → **`2`** run (or **`3`** sweep/matrix) → **`4`** follow live → **`5`** results & Compare A vs B → **`6`** leaderboard & Pareto HTML → **`7`** Harness Lens & Play (`T` on Home for live 17-theme preview).
+
+---
 
 ## The TUI
 
 | Key | Screen | What you do there |
 |---|---|---|
-| `1` | **Endpoints** | Add a server (`a`) or a GGUF (`g`), auto-detect or edit its quantization (`Q4_K_M`, `Q8_0`, `BF16`, …), model id (`--models`) and tokenizer (`--tokenizer`), start/stop `llama-server` (`s`), test it (`t`), choose active (`Space`). API keys are referenced by env var name, never stored. |
-| `2` | **Run** | Endpoint, tier (Golden Set, eval suites, performance, preflight), suites, samples per suite (`--eval-limit`), max output tokens, thinking, temperature, concurrency, sandbox RAM. Shows the highlighted `gbench` command and projected host RAM before launch. |
-| `3` | **Live run** | 5-stage pipeline, progress bar with ETA, current suite, syntax-highlighted streamed logs (`w` wrap, `f` follow); `c` cancels, `b` leaves it running in the background. |
-| `4` | **Suites** | gbench's Golden Set cases and all ~90 eval suites by pillar, with prerequisites (`docker image`, `Gemini key`, `logprobs`, `vision`, `tool calls`), primary metric badge, `Enter` for guide, `m` for metric breakdown, `Space` to queue. |
-| `m` | **Metrics** | Two-tab reference: **Core Formulas** (`gScore`, `golden_set`, `decode tok/s`, `TTFT`, quantization `bpw` / compactness, Radar normalization, RAM guard + live `#1` example) and **By Benchmark** (scoring metric, sub-metrics & protocol for every gbench suite), plus `b` for the quantization `bpw` scale. |
-| `5` | **Results** | Every run with quantization column and `/` search; `Enter` for scores (`m` jumps to that benchmark's metric), `Enter` again for samples (`f` cycles all/fail/pass), `Enter` again for full prompt/reasoning/response (`n`/`p` steps between samples). |
-| `6` | **Leaderboard** | `(model, quant)` variants ranked by `gScore` with heat map, `/` filter, `c` comparable-only, `m` metrics, `o` opens the interactive HTML dashboard. |
-| `7` | **Export** | Runs → a dataset folder (JSONL / Parquet + Hugging Face dataset card, including `base_model` and `quant`). |
-| `8` | **Sandbox** | The template (`b` builds it), catalog refresh (`c`), live sandboxes, `p` prunes leftovers from dead processes. |
-| `9` | **Settings** | Live-preview colour theme switcher (5 palettes), sandbox RAM / CPUs, host memory reserve, results folder. |
+| `1` | **Endpoints** | Add server (`a`), GGUF (`g`), import GGUF folder (`F`), auto-discover local servers (`D`), LoRA picker (`l`), `harness-hub` LoRA browser (`h`), start/stop `llama-server` (`s`), test (`t`), set active (`Space`). |
+| `2` | **Run** | Saved evaluation presets (`smoke`, `core`, `coding`, `quant-shootout`, `harness-smoke`) or manual tier (Golden, evals, perf, preflight, Harbor + `normal`/`code_mode`) with command preview, RAM guard & duration estimate. |
+| `3` | **Sweep & Matrix** | Overnight **Quantization Sweep** across multiple endpoints/GGUFs or **Adapter × Harness Matrix** (including `normal` vs `code_mode` A/B). |
+| `4` | **Live run** | 5-stage pipeline, batch step indicator, progress bar with ETA, syntax-highlighted streamed logs (`w` wrap, `f` follow, `c` cancel, `b` background). |
+| `5` | **Results** | Failure Taxonomy, Token Economy, Harbor Code Mode & KV cache telemetry, per-sample verdict explorer, notes/tags (`n`), archive (`a`/`A`), cleanup (`C`), and split-view **Compare A vs B** diff (`d`). |
+| `6` | **Leaderboard** | `(base_model, quant, adapter, harness)` rankings, `H` Adapter × Harness heatmap, `M` launch matrix, `R` Markdown/HTML report, `o` offline HTML dashboard with Pareto Frontier. |
+| `7` | **Harness Lens** | Inspect & compare 6 agent harnesses (`c`), read full live/reference system prompts (`p`) — Pi, OpenCode, Hermes, Claude Code, OpenHands, Aider — and launch interactive **Play** (`L`) against any endpoint + LoRA. |
+| `8` | **Suites** | gbench's Golden Set cases and ~90 eval suites by pillar, prerequisites, primary metric badge, `Enter` guide, `m` metric, `Space` queue. |
+| `9` | **Metrics** | Core formulas (with live `#1` worked example) & per-benchmark scoring protocols (`m` shortcut also works on Home), plus `b` quantization `bpw` table. |
+| `0` | **Export** | Export **Knowledge Distillation / LoRA SFT** datasets (ChatML for Unsloth Studio & HF TRL, or ShareGPT), raw Hugging Face eval datasets (JSONL/Parquet), or comparative Markdown/HTML reports. |
+| `d` | **Sandbox** | Modular setup installer (`i`), hardened Docker image (`b`), catalog refresh (`c`), live containers, `p` prune dead containers. |
+| `s` | **Settings** | 17 live-preview colour themes (`t`/`T` also on Home), sandbox RAM/CPUs, host memory guard, finish notifications, results folder. |
+
+---
 
 ## Screenshots
 
 ### Terminal UI
 
-| Home (`Gemini Aurora`) | Endpoints & Quantization |
+| Home — **`Antigravity Orbital`** *(signature theme)* | Live 17-Theme Preview Picker (`T`) |
 | :---: | :---: |
-| ![Home](assets/screenshots/01-home.png) | ![Endpoints](assets/screenshots/02-endpoints.png) |
-| **Run Configuration & Preflight** | **Suites Browser (90+ suites & metric badges)** |
-| ![Run](assets/screenshots/03-run.png) | ![Suites](assets/screenshots/04-suites.png) |
-| **Metrics · Core Formulas (with live `#1` example)** | **Metrics · By Benchmark (per-suite scoring & sub-metrics)** |
-| ![Metrics Core](assets/screenshots/05-metrics.png) | ![Metrics By Benchmark](assets/screenshots/06-metrics-benchmarks.png) |
-| **Results · Per-Sample Verdicts Explorer** | **Leaderboard (multi-quant ranking & heatmap)** |
-| ![Results Samples](assets/screenshots/07-results-samples.png) | ![TUI Leaderboard](assets/screenshots/08-leaderboard-tui.png) |
+| ![Antigravity Orbital Home](assets/screenshots/16-antigravity-theme.png) | ![Live Theme Picker](assets/screenshots/02-themes-live.png) |
+| **Home — `Kanagawa Wave` (ordered `1-0 · d · s` menu)** | **Endpoints, Quantizations & `harness-hub` LoRAs** |
+| ![Home](assets/screenshots/01-home.png) | ![Endpoints](assets/screenshots/03-endpoints.png) |
+| **Run Configuration, Presets & Duration Estimate** | **Harness Lens — Hermes Agent Anatomy** |
+| ![Run](assets/screenshots/04-run.png) | ![Harness Lens](assets/screenshots/05-harness-lens.png) |
+| **Harness System Prompt Viewer (`p`, XML highlight)** | **Results — Harbor Code Mode & KV Cache Telemetry** |
+| ![Harness System Prompt](assets/screenshots/06-harness-prompt.png) | ![Harbor Telemetry](assets/screenshots/07-results-telemetry.png) |
+| **Results — Failure Taxonomy & Token Economy** | **Leaderboard — Multi-Variant Rankings** |
+| ![Run Diagnostics](assets/screenshots/08-results-samples.png) | ![TUI Leaderboard](assets/screenshots/09-leaderboard-tui.png) |
+| **Leaderboard — Adapter × Harness Heatmap (`H`)** | **Suites Browser (90+ suites & `★` laptop badges)** |
+| ![Adapter x Harness Matrix](assets/screenshots/10-leaderboard-matrix.png) | ![Suites](assets/screenshots/11-suites.png) |
+| **Metrics — Core Formulas & By-Benchmark Protocols** | **Modular Setup & Hardened Docker Sandbox (`d`)** |
+| ![Metrics](assets/screenshots/12-metrics.png) | ![Modular Setup & Sandbox](assets/screenshots/13-sandbox-setup.png) |
 
 ### Interactive Web Leaderboard (`leaderboard.html`)
 
-Generated automatically after every run (100% self-contained inline SVG + vanilla JS — works offline via `file://`), with live theme switching, model & quantization filters, **Radar / Polar Area** circular charts and **Benchmarks / By Quant / gScore / Speed** bar charts:
+Generated automatically after every run (100% self-contained inline SVG + vanilla JS — works offline via `file://`), featuring all **17 live-switchable themes**, Quant / Adapter / Harness filters, **Adapter × Harness Heatmap Matrix** (with `code_mode` vs `normal` calls and KV cache hit %), **Radar / Polar Area** charts, grouped bar charts, and an interactive **Pareto Frontier** scatter plot:
 
 <p align="center">
-  <img src="assets/screenshots/09-web-radar-bars.png" alt="Web Leaderboard — Radar Area Chart and Grouped Bar Chart" width="900"><br>
-  <sub>Radar Area Chart (eval dimensions + quantization compactness) & grouped benchmark bar chart with interactive model/quant filters.</sub>
+  <img src="assets/screenshots/14-web-matrix-charts.png" alt="Web Leaderboard — Antigravity Orbital Theme, KPIs and Adapter x Harness Heatmap Matrix" width="900"><br>
+  <sub><b>Antigravity Orbital</b> theme active across all 17 palettes, KPI strip, Quant/Adapter/Harness filter chips, and the <b>Adapter × Harness Heatmap Matrix</b> (<code>OPENCODE</code>, <code>PI</code>, <code>PI [CODE_MODE]</code> with KV cache hit %).</sub>
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/10-web-polar-quant.png" alt="Web Leaderboard — Polar Area Chart and By Quant Bar Chart" width="900"><br>
-  <sub>Polar Area (Nightingale) dimension chart & <b>By Quant</b> comparison bars (<code>Q4_K_M</code> → <code>Q6_K</code> → <code>Q8_0</code>) + sortable Score Matrix.</sub>
+  <img src="assets/screenshots/15-web-pareto-table.png" alt="Web Leaderboard — Radar, Grouped Bar Charts and Pareto Frontier" width="900"><br>
+  <sub><b>Radar / Polar Area</b> dimensions, grouped <b>Bar Charts</b>, and the interactive <b>Pareto Frontier</b> scatter plot (<code>gScore vs decode tok/s</code>, <code>vs Size GB / bpw</code>, <code>vs gScore / 1k tok</code>).</sub>
 </p>
+
+---
 
 ## What it runs
 
-Everything is gbench's own CLI against `--remote-endpoint`:
-
-| In the TUI | gbench | Notes |
+| Tier | Backend | What it measures |
 |---|---|---|
-| Golden Set | `--golden-only [--golden-tasks …]` | 16 deterministic checks: code, math, tool calls, structured JSON, chat-template pairs, translation, safety, knowledge (vision / audio cases are N/A for a text-only model). |
-| Eval suites | `--evals-only --evals … --eval-limit N --max-output-tokens M --eval-concurrency C --suite-timeout S` | ★ suites need only the endpoint: `gsm8k`, `ifeval`, `mmlu_pro`, `gpqa_diamond`, `arc_agi`, `causalbench`, `mmlu_redux`, `multilingual_mmlu`, `imo_answer_bench`, `cruxeval`. Others need a Docker image built in the sandbox, a `GEMINI_API_KEY` judge or logprobs; the Suites screen says which. |
-| Performance | `--personal` (or `--serving-only --preset quick`) | Single-stream decode tok/s and TTFT on this device. |
-| Preflight | `--evals-only --evals … --preflight` | Each suite's own prerequisite check, no model request. |
+| **Golden Set** | `gbench --golden-only` | 16 deterministic sanity checks: code, math, tool calls, structured JSON, chat-template pairs, translation, safety, knowledge (vision/audio cases marked N/A for text-only models). |
+| **Eval suites** | `gbench --evals-only --evals …` | ~90 academic suites across pillars. `★` laptop-ready suites need only the endpoint (`gsm8k`, `ifeval`, `mmlu_pro`, `gpqa_diamond`, `arc_agi`, `causalbench`, `mmlu_redux`, `multilingual_mmlu`, `imo_answer_bench`, `cruxeval`). |
+| **Performance** | `gbench --personal` / `--serving-only` | Single-stream decode `tok/s`, output `tok/s`, and TTFT on your hardware. |
+| **Preflight** | `gbench --evals-only --preflight` | Prerequisite verification per suite without sending model requests. |
+| **Harbor Harness** | `harbor run` (Docker task containers) | Real end-to-end coding agent evaluation (**Pi**, **OpenCode**, **Hermes**, Claude Code, OpenHands, Aider) on `terminal-bench`, `swe-bench-verified`, etc., tracking `% resolved`, tokens, `normal` vs `code_mode` tool calls, KV cache hit %, steps, and tool error rate. |
 
-`--eval-limit` takes a stratified subset; results record it, and the leaderboard shows the number of samples beside
-every score so that a 20-sample score is never mistaken for a full run.
+`--eval-limit` takes a stratified subset; results record it, and the leaderboard displays `(n)` beside every score so a 20-sample smoke test is never confused with a full run.
 
-## Docker Sandboxes and memory
+---
 
-- **gbench never runs on the host.** `gbench-tui setup` builds a template (`gbtui-gbench:v2`): a builder sandbox
-  installs gbench from a pinned checkout plus its `evals` extras and a tokenizer stack (no torch) into a CPython 3.12
-  venv made with `uv`; it dumps gbench's suite catalog, is saved with `sbx template save` and removed. (The sandbox is
-  linux/arm64 on Apple silicon: the two `tree-sitter` pins, used only by `gorilla_apibench`, have no wheel there and are
-  left out.)
-- **One fresh sandbox per run**, created from the template with an explicit RAM cap (4 GB by default: enough for the Golden Set and the ★ suites) and half the
-  cores (at most 6). Its network is sbx's deny-by-default policy (Docker's allowlist of package registries and
-  model APIs) plus only what the run needs: the endpoint's port on the host and the dataset hosts (Hugging Face,
-  GitHub raw). It is removed when the run ends, fails or is cancelled; one left by a crashed process is pruned on the
-  next run.
-- **Memory guard**: before starting a sandbox or a llama-server, gbench-tui reads the host's available memory and
-  refuses if the machine would drop below a reserve (4 GB by default). llama-server gets a modest context (16k) and two
-  slots unless you say otherwise; its memory is estimated before it starts.
-- **One run at a time**, across gbench-tui processes (a lock file), so two benchmarks never compete for the same RAM.
-- Datasets are cached in `~/.cache/gbench-tui/work/hf` (mounted into each sandbox), so they download once.
+## Docker isolation and memory
 
-## Results, leaderboard and export
+- **gbench never runs on the host.** `gbt setup --profile llm` builds `gbtui-gbench:v3` (`python:3.12-slim`) with gbench from a pinned checkout + eval extras + tokenizer stack (no torch) in `/opt/gbench`, and dumps the suite catalog in an offline (`--network=none`) container.
+- **One fresh, hardened container per gbench run**: explicit RAM cap (4 GB default, no swap), CPU cap (half cores, max 6), `--pids-limit 256`, `--read-only` rootfs (writable `/tmp` tmpfs), `--cap-drop=ALL`, `--security-opt no-new-privileges:true`, non-root host UID:GID, and only `~/.cache/gbench-tui/work` mounted at `/work` (never `$HOME`, never `docker.sock`). Catalog refreshes and Parquet conversions run with `--network=none`. Every container is removed on completion, failure, or cancellation; orphans are pruned automatically.
+- **Harbor task isolation**: Harbor creates isolated per-task Docker containers against the local OpenAI-compatible endpoint (`host.docker.internal`), while `gbt` captures full ATIF trajectories, token usage, KV cache hit rates, and `normal` vs `code_mode` tool-call breakdowns.
+- **Host memory guard & lock**: before starting a container or `llama-server`, `gbt` checks available RAM (refusing if free RAM would fall below 4 GB), estimates GGUF + LoRA + KV-cache footprint (warning if context < 32k for agentic harnesses), and enforces one active run at a time via a lock file.
 
-```text
-~/.local/share/gbench-tui/
-├── results/<date>-<endpoint>-<quant>-<tier>/
-│   ├── gbtui.json          what was asked (endpoint, quant, flags), how it ended, sandbox size, gbench commit
-│   ├── gbench.log          gbench's console output
-│   ├── metadata.json       ┐
-│   ├── summary.json        │ gbench's own files, untouched
-│   ├── eval_summary.csv    │ (eval_*.json keep every sample trace)
-│   └── eval_<suite>_….json ┘
-├── leaderboard.md / .html / .json
+---
+
+## Knowledge Distillation & Export
+
+Results live untouched in `~/.local/share/gbench-tui/results/<run_id>/` alongside `gbtui.json`, `leaderboard.md/.html/.json`, and comparative `report.md/.html`.
+
+From **`0 · Export`** or **`gbt distill`**, export clean, standardized SFT datasets ready to train LoRAs in **Unsloth Studio / Desktop** or **Hugging Face TRL `SFTTrainer`**:
+
+```bash
+# Unsloth Studio / Desktop & Hugging Face TRL SFTTrainer (ChatML `messages` schema, passed-only rejection sampling)
+gbt distill ~/datasets/lfm3-sft --schema chatml --filter passed --reasoning think_tags --format both
+
+# ShareGPT `conversations` schema (`from`/`value` turns, stripping chain-of-thought)
+gbt distill ~/datasets/lfm3-sharegpt --schema sharegpt --filter passed --reasoning strip
+
+# Raw benchmark traces & scores (HF Dataset format)
+gbt export ~/datasets/lfm3-raw --format both
 ```
 
-The **dataset export** writes `data/samples.(jsonl|parquet)` (one row per sample: run, model, `base_model`, `quant`,
-suite, category, prompt, messages, reasoning, response, tool calls, gold answer, correct, status, detail, finish reason,
-tokens), `data/scores.(jsonl|parquet)` (one row per run and benchmark) and a `README.md` dataset card with `configs` for
-`datasets.load_dataset`. Parquet uses pyarrow on the host if present, otherwise the sandbox's.
+- **Full multi-turn Harbor ATIF trajectory reconstruction**: automatically reads `trajectories/*.json` from Harbor trials to preserve the real system prompt, user task, assistant tool calls (`tool_calls`), tool execution outputs (`role: "tool"`), and final response.
+- **Standardized output**: writes `data/train.jsonl` (and optional `data/train.parquet`), `data/manifest.json` with token/turn statistics, and a `README.md` Dataset Card containing copy-pasteable **Unsloth (`FastLanguageModel` + `SFTTrainer`)** and **HF TRL** training snippets.
+
+---
 
 ## Command line
 
+All subcommands work under **`gbt`**, `gbtui`, or `gbench-tui`:
+
 ```bash
-gbench-tui setup                                   # build the sandbox template (gbench + eval extras) and the catalog
-gbench-tui endpoints                               # list endpoints (with quantization) and probe them
-gbench-tui serve lfm3-1.7b-q8_0                    # start llama-server for an endpoint's GGUF (--stop to stop it)
-gbench-tui run --tier golden                       # Golden Set on the active endpoint
-gbench-tui run --tier evals --evals gsm8k ifeval --limit 20
-gbench-tui run --tier perf                         # --personal: decode tok/s, TTFT
-gbench-tui metrics                                 # print all metric formulas and calculations
-gbench-tui metrics ifeval                          # inspect a specific benchmark's scoring metric & protocol
-gbench-tui results                                 # every run with its quantization and headline
-gbench-tui leaderboard                             # print and write leaderboard.md/.html/.json
-gbench-tui export ~/datasets/lfm3 --format both    # samples + scores as a dataset
-gbench-tui prune                                   # remove sandboxes left by dead processes
+# Setup & environment
+gbt setup --profile full                           # modular setup: llm | agents | full
+gbt setup --check                                  # check Docker, gbench image, Harbor, harnesses & llama.cpp
+gbt prune                                          # remove containers left by dead processes
+
+# Endpoints, GGUF headers & harness-hub LoRAs
+gbt endpoints                                      # list endpoints (quant, adapter, ctx) and probe health
+gbt discover --add                                 # auto-discover Ollama, LM Studio, llama-server, vLLM on localhost
+gbt import-gguf ~/models --recursive --add         # read binary GGUF v2/v3 headers & import base models
+gbt loras --base LFM3-1.7B                         # browse compatible GGUF LoRAs on Hugging Face harness-hub
+gbt loras --base LFM3-1.7B --download harness-hub/LFM3-1.7B-hermes-GGUF --attach lfm3-1.7b
+gbt serve lfm3-1.7b-hermes-lora                    # start llama-server with base GGUF + --lora-scaled (--stop to stop)
+
+# Benchmarks, Presets, Sweeps & Harbor Matrix
+gbt run --preset smoke                             # presets: smoke, core, coding, quant-shootout, harness-smoke
+gbt run --tier harness --endpoint lfm3-1.7b-pi-lora --harness pi --tool-mode code_mode --limit 2
+gbt sweep --folder ~/models --preset quant-shootout --stop-server
+gbt matrix --endpoints lfm3-1.7b lfm3-1.7b-pi-lora lfm3-1.7b-hermes-lora --harnesses pi opencode hermes --tool-mode both --limit 2
+
+# Harness Lens, System Prompts & Interactive Playground
+gbt lens                                           # list all 6 profiled harnesses
+gbt lens hermes --prompt                           # print full system prompt (live captured or reference)
+gbt lens --compare pi hermes                       # side-by-side harness comparison
+gbt play lfm3-1.7b-hermes-lora --harness hermes    # launch interactive Hermes / Pi / OpenCode playground
+
+# Diagnostics, Leaderboards, Reports & Distillation
+gbt results                                        # list runs with quant, adapter, harness, tool_mode & notes
+gbt compare <run_a> <run_b>                        # sample-by-sample regressions, improvements & token economy
+gbt metrics [benchmark]                            # print all metric formulas or one benchmark's scoring protocol
+gbt leaderboard                                    # regenerate leaderboard.md / .html (Pareto + Matrix) / .json
+gbt report                                         # generate comparative report.md & report.html
+gbt distill ~/datasets/lfm3-sft --schema chatml    # Unsloth / HF TRL LoRA distillation dataset
+gbt export ~/datasets/lfm3-raw --format both       # raw eval samples + scores (JSONL + Parquet)
 ```
+
+---
 
 ## Example: LFM3-1.7B on a MacBook
 
-LFM3-1.7B (Q8_0 GGUF) served by `llama-server` (Metal, ctx 16k, 2 slots) on a MacBook Pro (M4 Pro, 64 GB);
-every gbench run in its own Docker Sandbox (4 GB, 6 CPUs), gbench `d3e4283`:
+**LFM3-1.7B (`Q8_0`, 1.72 GB GGUF)** served by `llama-server` (Metal, MacBook Pro M4 Pro 64 GB) across both **gbench** (isolated 4 GB / 6 CPU Docker containers, `gbench d3e4283`) and **Harbor `terminal-bench`** (`ctx 65536`, testing `base` vs `harness-hub` LoRAs):
 
-| Benchmark | gbench flags | Result | Samples |
+### Core LLM Benchmarks & LoRA Regression Check (`gbench`)
+
+| Variant | Golden Set | GSM8K (`n=20`) | IFEval (`n=20`) | Decode speed | TTFT | Notes |
+|---|---|---|---|---|---|---|
+| `lfm3-1.7b (Q8_0 · base)` | **85.7 %** (12/14) | **70.0 %** (14/20) | **90.0 %** (18/20) | **105.9 tok/s** | **0.33 s** | Zero failures in tool/JSON/code checks |
+| `lfm3-1.7b (Q8_0 · pi-lora)` | **85.7 %** (12/14) | – | – | – | – | **0 regression** on Golden Set |
+| `lfm3-1.7b (Q8_0 · opencode-lora)` | **85.7 %** (12/14) | – | – | – | – | **0 regression** on Golden Set |
+
+### Agentic Adapter × Harness Matrix & `code_mode` Telemetry (`Harbor · terminal-bench`)
+
+| Adapter | `opencode` (normal) | `pi` (normal) | `pi [code_mode]` |
 |---|---|---|---|
-| Golden Set | `--golden-only` | **85.7 %** (12/14 applicable; vision and audio cases N/A) | 14 |
-| GSM8K | `--evals-only --evals gsm8k --eval-limit 20` | **70.0 %** (14/20) | 20 |
-| IFEval | `--evals-only --evals ifeval --eval-limit 20` | **90.0 %** (18/20) | 20 |
-| Decode speed | `--personal --text-only` | **105.9 tok/s** single-stream, 512-token prompts | 11 |
-| Time to first token | `--personal --text-only` | **0.33 s** | 11 |
+| `base` | 451,845 tok · 21.0 tools | 686,292 tok · 35.0 tools | – |
+| `opencode-lora` | **20,791 tok · 2.0 tools** *(matched)* | 262,861 tok · 16.0 tools | – |
+| `pi-lora` | 772,866 tok · 34.0 tools | **185,387 tok · 14.0 tools** *(matched)* | **48,330 tok · 6.0 tools** (`6.0 code / 0.0 norm`) · **74.2 % KV hit** |
 
-gScore (mean of the % scores): **81.9**. The two Golden Set misses: `two_rivers_zurich` (the answer did not name the
-Limmat and the Sihl) and `safety_boundary`, where the model did refuse ("I’m sorry, but I can’t help with that.") but
-with a typographic apostrophe that gbench's refusal markers (`can't`, `i'm sorry`, …) do not match: the per-sample view
-shows exactly that, and gbench-tui reports gbench's verdict unchanged. 20-sample suites are a smoke test, not a
-leaderboard number; the leaderboard shows the sample count beside every score for that reason.
+> Even on a 1.7B model, the Adapter × Harness matrix immediately surfaces two concrete insights: (1) **adapter-harness alignment** cuts wasted token loops dramatically (`pi-lora` on `pi`: `-73 %` tokens vs `base`; `opencode-lora` on `opencode`: `-95 %` tokens vs `base`), and (2) enabling **`code_mode`** on `pi-lora` drops trajectory token burn another **`-74 %`** (`185k → 48k tok`, `14 → 6` tool calls) while sustaining a **`74.2 %` KV cache hit rate**.
+
+---
+
+## Architecture
+
+```text
+src/gbtui/
+├── cli.py              CLI entrypoint (`gbt`, `gbtui`, `gbench-tui`)
+├── tui.py              App coordinator composing modular screen mixins
+├── screens/            Modular TUI screens (home, endpoints, run, results, compare,
+│                       leaderboard, lens, suites, metrics, export, system, common)
+├── theme.py            17 WCAG-contrast palettes (incl. Antigravity Orbital) + animations
+├── ui.py               Zero-dep curses primitives, live-preview modals & pair-table guard
+├── config.py           Settings, endpoints, LoRA metadata & saved evaluation presets
+├── gguf_meta.py        Pure-stdlib binary GGUF v2/v3 header parser
+├── harness_hub.py      Zero-dep Hugging Face harness-hub LoRA browser & downloader
+├── servers.py          llama-server lifecycle (--lora-scaled), RAM estimation & auto-discovery
+├── sandbox.py          Hardened Docker container builder, runner & orphan pruning
+├── installer.py        Modular setup engine (`llm` | `agents` | `full`)
+├── runner.py           gbench execution, progress parsing, Quant Sweeps & lock management
+├── harbor_runner.py    Harbor execution, ATIF trajectory parsing & Code Mode telemetry
+├── harness_lens.py     Harness profiles, system prompt loader & interactive Play launcher
+├── results.py          Result parsing, Failure Taxonomy, Token Economy & history notes
+├── compare.py          Sample-by-sample A vs B diff & regression engine
+├── leaderboard.py      TUI/Markdown/JSON + offline SVG/JS Pareto & Matrix HTML dashboard
+├── report.py           Comparative Markdown & HTML model-card report generator
+├── export.py           HF Dataset export + Unsloth / HF TRL Knowledge Distillation exporter
+├── metrics.py          Metric formulas, scoring protocols & quantization bpw reference
+└── notify.py           Native macOS / Linux desktop & terminal bell notifications
+```
+
+---
 
 ## Notes
 
-- gbench-tui adds nothing to gbench's scoring: the numbers, statuses and per-sample verdicts are gbench's.
-- gbench's Golden Set stores the verdict and the response of each case, not the case itself: the samples view and
-  the export take the prompt and the expected answer from the case's JSON in the pinned gbench checkout.
-- `sbx` keeps its Docker sign-in in the macOS Keychain: sign in (`sbx login`) from a normal terminal session. If
-  `sbx ls` says "not signed in" right after a successful login, the daemon still holds the old token:
-  `sbx logout --yes && sbx login`, then `sbx daemon restart`.
-- The datasets behind each suite have their own licenses (gbench's `docs/THIRD_PARTY_DATASETS.md`); check them before
-  publishing an exported dataset.
-- Inspired by [slmbench](https://github.com/emi-dm/slm-bench)'s TUI. Not affiliated with Google DeepMind; `DeepMind Classic`
-  is available alongside the prism themes via `t` on Home or in Settings.
+- **Scoring fidelity**: `gbt` adds nothing to gbench's or Harbor's scoring — numbers, statuses and per-sample verdicts are reported unchanged.
+- **Golden Set prompts**: gbench's Golden Set stores verdicts and responses; the sample explorer and distillation exporter join prompts and expected answers from the pinned gbench checkout.
+- **Docker runtimes**: works with Docker Desktop, OrbStack, Colima, or native Linux Docker Engine — no Docker login required.
+- **Dataset licenses**: each benchmark suite carries its own dataset license (see gbench's `docs/THIRD_PARTY_DATASETS.md`); verify before publishing exported or distilled datasets.
+- Inspired by [slmbench](https://github.com/emi-dm/slm-bench)'s TUI. Not affiliated with Google DeepMind.
 
 ## License
 

@@ -1,8 +1,8 @@
-"""Reading gbench's results: one directory per run (gbtui.json + gbench's metadata.json, summary.json, eval_*.json).
+"""Reading gbench & Harbor results: one directory per run (gbtui.json + summary.json + eval_*.json / harbor_trials.json).
 
-Everything is normalised into `Run` objects with a flat list of `Score`s (one per Golden Set run, eval suite or
-performance measurement) and, on demand, the per-sample items (Golden Set cases, eval sample_traces) for the failure
-explorer and the dataset export. Nothing here re-scores anything: the numbers are gbench's.
+Everything is normalised into `Run` objects with a flat list of `Score`s (one per Golden Set run, eval suite,
+performance measurement, or Harbor harness run) and, on demand, the per-sample items for the failure explorer and
+dataset export. Nothing here re-scores anything: the numbers are gbench's or Harbor's.
 """
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ def _load_dict(p: Path) -> dict:
 
 @dataclass
 class Score:
-    kind: str                  # golden | eval | perf
-    name: str                  # "golden_set", the suite, or "decode_tok_s" / "ttft_s"
-    value: float | None        # % for golden / eval, the unit's value for perf
+    kind: str                  # golden | eval | perf | harness | quality
+    name: str                  # "golden_set", suite, "decode tok/s", or "pi:terminal-bench"
+    value: float | None        # % for golden / eval / harness, unit's value for perf
     unit: str = "%"
     n: int = 0
     correct: int | None = None
@@ -48,7 +48,7 @@ class Run:
     path: Path
     meta: dict = field(default_factory=dict)          # gbtui.json
     metadata: dict = field(default_factory=dict)      # gbench metadata.json
-    summary: dict = field(default_factory=dict)       # gbench summary.json
+    summary: dict = field(default_factory=dict)       # gbench / harbor summary.json
     scores: list = field(default_factory=list)
 
     @property
@@ -89,21 +89,59 @@ class Run:
         return ""
 
     @property
+    def target_harness(self) -> str:
+        ep = self.endpoint
+        if ep.get("target_harness"):
+            return config.normalize_harness(ep["target_harness"])
+        return (config.detect_harness(ep.get("lora") or "")
+                or config.detect_harness(ep.get("adapter_name") or ""))
+
+    @property
+    def adapter(self) -> str:
+        ep = self.endpoint
+        if ep.get("adapter_name"):
+            return config.normalize_adapter(ep["adapter_name"])
+        return config.detect_adapter(
+            ep.get("lora") or "", ep.get("model") or "", ep.get("name") or "", self.target_harness,
+        )
+
+    @property
+    def eval_harness(self) -> str:
+        """The agent harness executed during a `tier == 'harness'` Harbor run (empty for standard gbench runs)."""
+        if self.tier != "harness":
+            return ""
+        spec = self.meta.get("spec") or {}
+        if spec.get("harness"):
+            return config.normalize_harness(spec["harness"])
+        for r in (self.summary.get("models") or []):
+            if isinstance(r, dict) and r.get("benchmark_type") == "harness" and r.get("harness"):
+                return config.normalize_harness(r["harness"])
+        return ""
+
+    @property
     def base_model(self) -> str:
-        return config.split_model_quant(self.model, self.quant)[0]
+        base = config.split_model_quant(self.model, self.quant)[0]
+        return config.strip_adapter_suffix(base, self.adapter, self.target_harness)
 
     @property
     def model_label(self) -> str:
-        q = self.quant
-        if not q:
-            return self.model
-        return f"{self.base_model} ({q})"
+        parts = [p for p in (self.quant, self.adapter) if p]
+        if parts:
+            return f"{self.base_model} ({' · '.join(parts)})"
+        return self.model
 
     @property
     def tier(self) -> str:
-        return (self.meta.get("spec") or {}).get("tier") or ("golden" if any(s.kind == "golden" for s in self.scores)
-                                                             else "evals" if any(s.kind == "eval" for s in self.scores)
-                                                             else "perf")
+        t = (self.meta.get("spec") or {}).get("tier")
+        if t:
+            return t
+        if any(s.kind == "harness" for s in self.scores):
+            return "harness"
+        if any(s.kind == "golden" for s in self.scores):
+            return "golden"
+        if any(s.kind == "eval" for s in self.scores):
+            return "evals"
+        return "perf"
 
     @property
     def status(self) -> str:
@@ -131,10 +169,55 @@ class Run:
                 parts.append(f"{s.name} {s.status or 'n/a'}")
             elif s.unit == "%":
                 parts.append(f"{s.name} {s.value:.1f}%")
+            elif s.unit == "tok":
+                parts.append(f"{s.name} {s.value:.0f} tok")
             else:
                 parts.append(f"{s.name} {s.value:.2f} {s.unit}")
         more = len(self.scores) - 4
         return " · ".join(parts) + (f" · +{more}" if more > 0 else "") if parts else (self.meta.get("error") or "no results")
+
+    @property
+    def harness_entry(self) -> dict | None:
+        """Raw summary dict for a Harbor harness run, if present."""
+        for r in (self.summary.get("models") or []):
+            if isinstance(r, dict) and r.get("benchmark_type") == "harness":
+                return r
+        return None
+
+    @property
+    def tool_mode(self) -> str:
+        he = self.harness_entry
+        if he and he.get("tool_mode"):
+            return str(he["tool_mode"])
+        return str((self.meta.get("spec") or {}).get("tool_mode") or "normal")
+
+    @property
+    def notes(self) -> str:
+        return str(self.meta.get("notes") or "")
+
+    @property
+    def tags(self) -> list[str]:
+        t = self.meta.get("tags")
+        return [str(x) for x in t if str(x).strip()] if isinstance(t, list) else []
+
+    @property
+    def archived(self) -> bool:
+        return bool(self.meta.get("archived"))
+
+
+def save_meta(run: Run, *, notes: str | None = None, tags: list[str] | None = None,
+              archived: bool | None = None) -> None:
+    """Persists user annotations (notes, tags, archived) back to `gbtui.json`."""
+    if notes is not None:
+        run.meta["notes"] = str(notes).strip()
+    if tags is not None:
+        run.meta["tags"] = [str(t).strip() for t in tags if str(t).strip()]
+    if archived is not None:
+        run.meta["archived"] = bool(archived)
+    p = run.path / "gbtui.json"
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(run.meta, indent=2), encoding="utf-8")
+    tmp.replace(p)
 
 
 def _num(x):
@@ -189,6 +272,43 @@ def load_run(path: Path) -> Run | None:
                                     pillar=r.get("pillar", ""), comparable=r.get("leaderboard_comparable"),
                                     detail=r.get("failure_reason") or r.get("error") or r.get("accuracy_withheld_reason") or "",
                                     file=(r.get("sample_traces_omitted") or {}).get("file", "")))
+        elif bt == "harness":
+            h = r.get("harness") or "harness"
+            tm = r.get("tool_mode") or "normal"
+            ds = r.get("dataset_short") or r.get("dataset") or "harbor"
+            res_rate = _num(r.get("resolved_rate"))
+            total_t = int(r.get("total_tasks") or 0)
+            res_t = int(r.get("resolved_tasks") or 0)
+            avg_tok = _num(r.get("avg_tokens"))
+            avg_tc = _num(r.get("avg_tool_calls"))
+            avg_cm = _num(r.get("avg_code_mode_calls"))
+            avg_nm = _num(r.get("avg_normal_tool_calls"))
+            cache_hit = _num(r.get("cache_hit_rate_pct"))
+            det_parts = [f"{res_t}/{total_t} resolved"]
+            if tm == "code_mode":
+                det_parts.append("code-mode")
+            if avg_tok is not None:
+                det_parts.append(f"avg {avg_tok:.0f} tok")
+            if avg_tc is not None:
+                det_parts.append(f"avg {avg_tc:.1f} tools")
+            if avg_cm is not None and avg_nm is not None:
+                det_parts.append(f"code:{avg_cm:.1f}/norm:{avg_nm:.1f}")
+            if cache_hit is not None:
+                det_parts.append(f"cache {cache_hit:.0f}%")
+            score_name = f"{h}[code]:{ds}" if tm == "code_mode" else f"{h}:{ds}"
+            run.scores.append(Score("harness", score_name, res_rate, "%", total_t, res_t,
+                                    r.get("status", ""), pillar="Harness",
+                                    detail=" · ".join(det_parts), file=r.get("trials_file", "harbor_trials.json")))
+            if avg_tok is not None:
+                run.scores.append(Score("perf", "avg tokens", avg_tok, "tok", total_t))
+            if avg_tc is not None:
+                run.scores.append(Score("perf", "avg tool calls", avg_tc, "tools", total_t))
+            if avg_cm is not None and (avg_cm > 0 or tm == "code_mode"):
+                run.scores.append(Score("perf", "code-mode calls", avg_cm, "tools", total_t))
+            if avg_nm is not None and (avg_nm > 0 or avg_cm):
+                run.scores.append(Score("perf", "normal tool calls", avg_nm, "tools", total_t))
+            if cache_hit is not None:
+                run.scores.append(Score("perf", "KV cache hit", cache_hit, "pct", total_t))
         elif bt in ("serving", "serving_multimodal", "throughput"):
             run.scores.extend(_perf_scores(r))
         elif bt == "quality":
@@ -211,12 +331,13 @@ def load_run(path: Path) -> Run | None:
     return run
 
 
-def list_runs(results_dir: Path) -> list:
+def list_runs(results_dir: Path, include_archived: bool = False) -> list:
     runs = []
     for d in sorted(results_dir.iterdir() if results_dir.is_dir() else [], reverse=True):
         r = load_run(d)
         if r and (r.meta or r.summary):
-            runs.append(r)
+            if include_archived or not r.archived:
+                runs.append(r)
     runs.sort(key=lambda r: r.started, reverse=True)
     return runs
 
@@ -276,4 +397,33 @@ def items(run: Run, score: Score | None = None) -> list:
                         "gold": t.get("gold_answer"), "correct": bool(t.get("is_correct")), "status": t.get("status"),
                         "detail": t.get("error") or t.get("health") or "", "finish_reason": t.get("finish_reason"),
                         "completion_tokens": t.get("completion_tokens")})
+    harnesses = [s for s in run.scores if s.kind == "harness"] if score is None else ([score] if score.kind == "harness" else [])
+    for s in harnesses:
+        tf = run.path / (s.file or "harbor_trials.json")
+        trials = _load(tf)
+        if not isinstance(trials, list):
+            continue
+        for t in trials:
+            if not isinstance(t, dict):
+                continue
+            det = []
+            if t.get("reward") is not None:
+                det.append(f"reward={t['reward']}")
+            if t.get("total_tokens") is not None:
+                det.append(f"tokens={t['total_tokens']}")
+            if t.get("tool_calls") is not None:
+                det.append(f"tool_calls={t['tool_calls']}")
+            if t.get("duration_s") is not None:
+                det.append(f"{t['duration_s']:.1f}s")
+            if t.get("error"):
+                det.append(str(t["error"]))
+            out.append({
+                "suite": s.name, "kind": "harness", "id": t.get("task_name"), "category": run.eval_harness or "harness",
+                "title": t.get("trial_name") or "", "prompt": t.get("prompt") or "", "messages": None,
+                "response": t.get("response") or "", "reasoning": "",
+                "tool_calls": t.get("tool_call_list") or [], "gold": "reward >= 1.0",
+                "correct": bool(t.get("correct")), "status": t.get("status") or "",
+                "detail": " · ".join(det), "finish_reason": None,
+                "completion_tokens": t.get("output_tokens") or t.get("total_tokens"),
+            })
     return out

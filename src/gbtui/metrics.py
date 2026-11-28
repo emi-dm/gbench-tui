@@ -260,7 +260,7 @@ METRICS: tuple[MetricDef, ...] = (
         formula="est_bytes = gguf_size × 1.05 + ctx × 0.06 MB + 600 MB\nallow     = (host_available_RAM − est_bytes) ≥ min_free_gb",
         summary="Pre-flight host RAM estimate that prevents llama-server and sandboxes from swapping",
         details=(
-            "Before launching llama-server for a local GGUF or creating a Docker Sandbox microVM, "
+            "Before launching llama-server for a local GGUF or starting a Docker container, "
             "gbench-tui reads current available host memory and compares it against the estimated weight "
             "+ KV-cache + buffer footprint (plus sandbox RAM cap). Launch is blocked if free RAM would "
             "fall below Settings.min_free_gb (default 4.0 GB)."
