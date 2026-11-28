@@ -134,9 +134,13 @@ class UI:
         key = (cfg, cbg)
         if key not in self._pairs:
             n = len(self._pairs) + 1
-            max_pairs = min(getattr(curses, "COLOR_PAIRS", 64), 255)
-            if n >= max_pairs:
-                return (curses.A_BOLD if bold else 0) | (curses.A_DIM if dim else 0)
+            if n >= self._max_pairs():
+                # Table full mid-frame: reuse the closest existing pair (same fg, else same bg) instead of
+                # overflowing A_COLOR (which bleeds into other attributes and paints "shadows").
+                alt = next((p for (f, b), p in self._pairs.items() if f == cfg and b == -1), None) \
+                    or next((p for (f, b), p in self._pairs.items() if f == cfg), None)
+                base = curses.color_pair(alt) if alt else 0
+                return base | (curses.A_BOLD if bold else 0) | (curses.A_DIM if dim else 0)
             try:
                 curses.init_pair(n, cfg, cbg)
             except curses.error:
@@ -215,7 +219,20 @@ class UI:
         return self.put(y, x, f" {text} ", self.color(fg, bg, bold, auto_sel=False), maxw=maxw)
 
     # ---------- chrome: header, footer, toast ----------
+    def _max_pairs(self) -> int:
+        """Usable pair ids: limited by COLOR_PAIRS *and* by the A_COLOR bit mask (0xff00 → 255 on macOS ncurses)."""
+        mask = getattr(curses, "A_COLOR", 0xFF00) or 0xFF00
+        mask_pairs = (mask >> 8) if mask & 0xFF == 0 else 255
+        return max(8, min(getattr(curses, "COLOR_PAIRS", 64), mask_pairs, 32767))
+
+    def recycle_pairs(self, threshold: float = 0.6) -> None:
+        """Called at frame start (header): once the session has accumulated many pairs, start a fresh table.
+        Safe because every screen fully redraws after `header()`, so no stale cell keeps an old pair id."""
+        if len(self._pairs) >= int(self._max_pairs() * threshold):
+            self._pairs.clear()
+
     def header(self, title, sub="", right_badge=None, crumbs=None, tick=0):
+        self.recycle_pairs()
         h, w = self.size()
         bar = self.color(T.SOFT, T.BAR)
         self.fill(0, 0, w, bar)

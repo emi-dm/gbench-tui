@@ -348,6 +348,16 @@ class TestUIPrimitives(unittest.TestCase):
                     u2.color(c, T.BAR)
                     u2.color(c, T.SEL)
                 self.assertLess(len(u2._pairs), 255)
+            # Long sessions (animations, many screens) never exceed the A_COLOR mask: header() recycles the table
+            with mock.patch.object(curses, "A_COLOR", 0xFF00, create=True):
+                self.assertEqual(u2._max_pairs(), 255)
+                for fg in range(16, 256):
+                    for bg in (None, T.BAR):
+                        u2.color(fg, bg)
+                    if fg % 20 == 0:
+                        u2.header("frame")
+                    self.assertLess(len(u2._pairs), 255)
+                self.assertLess(max(u2._pairs.values()), 255)
         T.set_theme("aurora")
 
         # 2. Modular setup check CLI
